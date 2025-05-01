@@ -3,4 +3,6 @@ This repo. has codes for classification models trained on the SDSS quasar data w
 
 In this work, we analyse SDSS quasar data based on the photometric bands and apply PCA to the high dimensional data to reduce it to a 2 dimensional data. We train random forest and pca based linear regression classifiers on the dataset to evaluate the efficiency of radio-loud and radio-quiet quasar classifications. Due to severe class imbalance in the original dataset, we are exploring the role of SMOTE, XGBOOST and other resampling techniques on the minority class for improving the performace of the classifier. Please cite this work wherever required.
 
+The SDSS data set can be found at https://web.archive.org/web/20180407210543/http://astrostatistics.psu.edu/datasets/SDSS_quasar.dat
+
 Thank you!
