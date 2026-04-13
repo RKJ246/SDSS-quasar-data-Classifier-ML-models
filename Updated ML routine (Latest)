@@ -1,0 +1,1942 @@
+################### sdss dr16 pca analysis v21 (LATEST VERSION) ##########################
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+import emcee
+import corner
+from scipy.stats import gaussian_kde
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    accuracy_score, precision_score, recall_score, f1_score, roc_curve, auc
+)
+import xgboost as xgb
+import itertools
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import re
+import astropy.io.fits as fits
+from astropy.cosmology import FlatLambdaCDM
+from scipy.spatial import ConvexHull
+import warnings
+warnings.filterwarnings('ignore')
+
+
+################ THESE ARE USER CONTROLLED PARAMETERS
+RQ_FRACTION = 1
+RANDOM_SEED = 42
+SORT_BY = "Recall"
+
+# MCMC USER CONTROLLED SETTINGS
+
+MCMC_WALKERS     = 64
+MCMC_BURN_IN     = 1000
+MCMC_PRODUCTION  = 5000
+MCMC_THIN        = 15
+MCMC_CONV_FACTOR = 50
+
+# AMBGISIOUS QSO USER CONTROLLED FLUX SWEEP
+
+FLUX_SWEEP_VALUES_mJy   = [0.75, 0.85, 0.95, 1.05, 1.15, 1.25]   # These are entered in mJy units, conversion is done later
+VOTE_FRACTION_THRESHOLD = 4/6
+
+FIRST_FLUX_LIMIT_mJy    = 1.0
+
+# LOGISTIC REGRESSION DEGREE CAN BE SET HERE
+
+LR_DEGREE = 1   
+
+# FOR RLQSR WEIGHTS
+
+RLQSR_FISHER_WEIGHT = 0.5   # <-- CHANGE FISHER WEIGHT HERE
+RLQSR_SPAN_WEIGHT   = 0.5   # <-- CHANGE SPAN  WEIGHT HERE
+
+
+########### THIS IS THE SENTINEL CONFIGURATION BLOCK. HERE WE HANDCODE SENTINELS FOR PROPER CLEANING OF DATASET FOR CHOSEN FEATURES
+
+SENTINEL_CONFIG = {
+
+    # psf
+
+    "psfmag_u": {"sentinels": [-9999.0, -9999, 0.0, -1, -1.0], "also_negative": False,
+                 "also_zero": True, "log_transform": False},
+    "psfmag_g": {"sentinels": [-9999.0, -9999, 0.0, -1, -1.0], "also_negative": False,
+                 "also_zero": True, "log_transform": False},
+    "psfmag_r": {"sentinels": [-9999.0, -9999, 0.0, -1, -1.0], "also_negative": False,
+                 "also_zero": True, "log_transform": False},
+    "psfmag_i": {"sentinels": [-9999.0, -9999, 0.0, -1, -1.0], "also_negative": False,
+                 "also_zero": True, "log_transform": False},
+    "psfmag_z": {"sentinels": [-9999.0, -9999, 0.0, -1, -1.0], "also_negative": False,
+                 "also_zero": True, "log_transform": False},
+
+    # WISE
+
+    "w1_mag": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+               "also_zero": False, "log_transform": False},
+    "w2_mag": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+               "also_zero": False, "log_transform": False},
+
+    "w1_flux_snr": {"sentinels": [-9999.0, -9999], "also_negative": False,
+                    "also_zero": True, "log_transform": False},
+    "w2_flux_snr": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+                    "also_zero": True, "log_transform": False},
+
+
+   
+    "mi": {"sentinels": [-9999.0, -9999, -1, -1.0, 1, 1.0], "also_negative": False,
+           "also_zero": False, "log_transform": False},
+
+    "z_pca": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": True,
+              "also_zero": False, "log_transform": False},
+
+   
+    "sn_median_all": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+                      "also_zero": False, "log_transform": False},
+
+    # x ray
+
+    "rosat_src_flux": {"sentinels": [-9999.0, -9999, -1000.0, -1, -1.0],
+                       "also_negative": True, "also_zero": True,
+                       "log_transform": True},
+
+    
+    "xmm_total_flux": {"sentinels": [-9999.0, -9999, -1000.0, -1, -1.0],
+                       "also_negative": True, "also_zero": True,
+                       "log_transform": True},
+    "xmm_soft_flux":  {"sentinels": [-9999.0, -9999, -1000.0, -1, -1.0],
+                       "also_negative": True, "also_zero": True,
+                       "log_transform": True},
+    "xmm_hard_flux":  {"sentinels": [-9999.0, -9999, -1000.0, -1, -1.0],
+                       "also_negative": True, "also_zero": True,
+                       "log_transform": True},
+
+    # Gaia
+
+    "gaia_g_mag":  {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+                    "also_zero": False, "log_transform": False},
+    "gaia_bp_mag": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+                    "also_zero": False, "log_transform": False},
+    "gaia_rp_mag": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+                    "also_zero": False, "log_transform": False},
+    "gaia_ra":     {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+                    "also_zero": False, "log_transform": False},
+    "gaia_dec":    {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+                    "also_zero": False, "log_transform": False},
+
+    #GALEX 
+
+    "nuv": {"sentinels": [-9999.0, -9999, -999.0, -999, -1, -1.0], "also_negative": True,
+            "also_zero": True, "log_transform": False},
+    "fuv": {"sentinels": [-9999.0, -9999, -999.0, -999, -1, -1.0], "also_negative": True,
+            "also_zero": True, "log_transform": False},
+
+    # UKIDSS
+
+    "y_flux": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+               "also_zero": False, "log_transform": False},
+    "j_flux": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+               "also_zero": False, "log_transform": False},
+    "h_flux": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+               "also_zero": False, "log_transform": False},
+    "k_flux": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
+               "also_zero": False, "log_transform": False},
+}
+
+# another cut applied for mags
+
+MAG_MIN = 10.0
+MAG_MAX = 35.0
+MAG_COLS = ["psfmag_u", "psfmag_g", "psfmag_r", "psfmag_i", "psfmag_z"]
+
+########### This is the end of sentinel config block
+
+
+np.random.seed(RANDOM_SEED)
+eps = 1e-10
+
+
+############ sentinel cleaning block
+
+
+def apply_sentinel_config(df, config, mag_cols=None, mag_min=10.0, mag_max=35.0):
+    FLOAT_TOL = 1e-6
+
+    for col, cfg in config.items():
+        if col not in df.columns:
+            print(f" [SENTINEL WARNING] Column '{col}' not found in DataFrame — skipped.")
+            continue
+
+        s = df[col].astype(float)
+
+        for sv in cfg.get("sentinels", []):
+            mask_sv = np.abs(s - float(sv)) < FLOAT_TOL
+            s = s.where(~mask_sv, other=np.nan)
+
+        if cfg.get("also_negative", False):
+            s = s.where(s >= 0.0, other=np.nan)
+
+        if cfg.get("also_zero", False):
+            s = s.where(s != 0.0, other=np.nan)
+
+        if mag_cols and col in mag_cols:
+            s = s.where((s > mag_min) & (s < mag_max), other=np.nan)
+
+        if cfg.get("log_transform", False):
+            s = s.where(s > 0.0, other=np.nan)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                s = np.log10(s)
+            s = s.replace([np.inf, -np.inf], np.nan)
+
+        df[col] = s
+
+    return df
+
+
+def build_missingness_flags(df, config):              ######### missingness flags built here, essential for analysis
+    flag_map = {}
+    for col in config:
+        if col not in df.columns:
+            continue
+        flag_col = f"{col}_missing"
+        df[flag_col] = df[col].isnull().astype(int)
+        flag_map[col] = flag_col
+    return flag_map
+
+
+def audit_features(df, cols, label="AUDIT"):
+    print(f"\n{'='*60}")
+    print(f" {label}")
+    print(f"{'='*60}")
+    print(f" {'Column':<25} {'NaN':>8} {'−inf':>8} {'<−100':>8} {'<0':>8} "
+          f"{'min':>12} {'max':>12}")
+    print(f" {'-'*85}")
+    for col in cols:
+        if col not in df.columns:
+            continue
+        v = df[col].astype(float)
+        finite_v = v[np.isfinite(v)]
+        vmin = finite_v.min() if len(finite_v) > 0 else np.nan
+        vmax = finite_v.max() if len(finite_v) > 0 else np.nan
+        print(f" {col:<25} "
+              f"{v.isna().sum():>8,} "
+              f"{np.isinf(v).sum():>8,} "
+              f"{(v < -100).sum():>8,} "
+              f"{(v < 0).sum():>8,} "
+              f"{vmin:>12.3f} "
+              f"{vmax:>12.3f}")
+    print()
+
+
+def safe_log10(series):
+    s = series.copy().astype(float)
+    s = s.where(s > 0, other=np.nan)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        result = np.log10(s)
+    result = result.replace([np.inf, -np.inf], np.nan)
+    return result
+
+
+########### helper functions for different blocks
+
+def find_best_threshold(y_true_val, y_proba_val, min_precision=0.30):
+    thresholds = np.linspace(0.01, 0.99, 99)
+    best_f1, best_th = -1, 0.5
+    for th in thresholds:
+        y_pred = (y_proba_val >= th).astype(int)
+        n_pos = y_pred.sum()
+        if n_pos == 0 or n_pos == len(y_pred):
+            continue
+        p = precision_score(y_true_val, y_pred, zero_division=0)
+        if p < min_precision:
+            continue
+        f1 = f1_score(y_true_val, y_pred, zero_division=0)
+        if f1 > best_f1:
+            best_f1, best_th = f1, th
+    return best_th
+
+
+def auto_axis_limits(arr2d, percentile_lo=1, percentile_hi=99, padding=0.15):
+    x, y = arr2d[:, 0], arr2d[:, 1]
+    xlo = np.percentile(x, percentile_lo)
+    xhi = np.percentile(x, percentile_hi)
+    ylo = np.percentile(y, percentile_lo)
+    yhi = np.percentile(y, percentile_hi)
+    xpad = padding * (xhi - xlo)
+    ypad = padding * (yhi - ylo)
+    return xlo - xpad, xhi + xpad, ylo - ypad, yhi + ypad
+
+########## MCMC likelihood functions
+
+def _stable_log_likelihood_weighted(z, y, w):
+    softplus = np.maximum(z, 0) + np.log1p(np.exp(-np.abs(z)))
+    return np.sum(w * (y * z - softplus))
+
+
+def log_prior_normal(theta, sigma=10.0):
+    return -0.5 * np.sum((theta / sigma) ** 2)
+
+
+def log_posterior_linear_weighted(theta, X2, y, w):
+    lp = log_prior_normal(theta)
+    if not np.isfinite(lp):
+        return -np.inf
+    z = theta[0] + X2 @ theta[1:]
+    return lp + _stable_log_likelihood_weighted(z, y, w)
+
+
+def log_posterior_quadratic_weighted(theta, X2, y, w):
+    lp = log_prior_normal(theta)
+    if not np.isfinite(lp):
+        return -np.inf
+    x1, x2 = X2[:, 0], X2[:, 1]
+    z = (theta[0]
+         + theta[1]*x1 + theta[2]*x2
+         + theta[3]*x1**2 + theta[4]*x1*x2 + theta[5]*x2**2)
+    return lp + _stable_log_likelihood_weighted(z, y, w)
+
+
+def run_mcmc(log_posterior_fn, n_params, X2_train, y_train_arr,
+             n_walkers, n_burn, n_prod, thin, label=""):
+    n_total = len(y_train_arr)
+    n_pos   = y_train_arr.sum()
+    n_neg   = n_total - n_pos
+    w_pos   = 0.5 * n_total / n_pos
+    w_neg   = 0.5 * n_total / n_neg
+    sample_weights = np.where(y_train_arr == 1, w_pos, w_neg)
+
+    rng        = np.random.default_rng(RANDOM_SEED)
+    degree_init = 1 if n_params == 3 else 2
+    poly_init   = PolynomialFeatures(degree=degree_init, include_bias=False)
+    X_init      = poly_init.fit_transform(X2_train)
+
+    lr_init = LogisticRegression(
+        max_iter=2000, solver='lbfgs',
+        class_weight='balanced',
+        random_state=RANDOM_SEED
+    )
+    lr_init.fit(X_init, y_train_arr)
+
+    mle = np.concatenate([lr_init.intercept_, lr_init.coef_[0]])
+    assert mle.shape[0] == n_params, (
+        f"[{label}] MLE shape mismatch: got {mle.shape[0]}, expected {n_params}."
+    )
+
+    p0 = mle + rng.normal(0, 0.05, size=(n_walkers, n_params))
+
+    sampler = emcee.EnsembleSampler(
+        n_walkers, n_params, log_posterior_fn,
+        args=(X2_train, y_train_arr, sample_weights)
+    )
+
+    print(f"\n [{label}] Lets look at burn-in ({n_burn} steps friend)...")
+    sampler.run_mcmc(p0, n_burn, progress=True)
+    sampler.reset()
+
+    print(f" [{label}] Lets look at production ({n_prod} steps) friend...")
+    sampler.run_mcmc(None, n_prod, progress=True)
+
+    try:
+        tau       = sampler.get_autocorr_time(tol=0)
+        max_tau   = np.max(tau)
+        converged = n_prod > MCMC_CONV_FACTOR * max_tau
+        print(f" [{label}] Max IAT = {max_tau:.1f} | "
+              f"N_prod / (50 * IAT) = {n_prod / (MCMC_CONV_FACTOR * max_tau):.2f} | "
+              f"Converged: {converged}")
+        if not converged:
+            print(f" [{label}] WARNING: chain may not be converged. "
+                  f"Consider MCMC_PRODUCTION >= {int(MCMC_CONV_FACTOR * max_tau * 1.2):,}")
+    except emcee.autocorr.AutocorrError as e:
+        print(f" [{label}] IAT estimate unreliable: {e}")
+
+    flat_chain = sampler.get_chain(discard=0, thin=thin, flat=True)
+    print(f" [{label}] Flat chain shape: {flat_chain.shape}")
+    return flat_chain, sampler
+
+
+def mcmc_decision_boundary(theta_samples, xx, yy, model='linear'):
+    grid  = np.c_[xx.ravel(), yy.ravel()]
+    x1, x2 = grid[:, 0], grid[:, 1]
+    probs_all = []
+    for theta in theta_samples:
+        if model == 'linear':
+            z = theta[0] + theta[1]*x1 + theta[2]*x2
+        else:
+            z = (theta[0]
+                 + theta[1]*x1 + theta[2]*x2
+                 + theta[3]*x1**2 + theta[4]*x1*x2 + theta[5]*x2**2)
+        probs_all.append(1.0 / (1.0 + np.exp(-z)))
+    probs_arr    = np.array(probs_all)
+    probs_median = np.median(probs_arr, axis=0).reshape(xx.shape)
+    probs_lo     = np.percentile(probs_arr, 16, axis=0).reshape(xx.shape)
+    probs_hi     = np.percentile(probs_arr, 84, axis=0).reshape(xx.shape)
+    return probs_median, probs_lo, probs_hi
+
+############3 THIS MARKS COMPLETION OF ALL THE DEFINITIONS AND CONFIG SETTINGS NOW WE WILL GET TO ACTUAL WORK
+
+fits_path = r"/home/vivek/sdss_dr16/DR16Q_v4.fits"   ######### change file path as needed
+print("Confirmation check: Reading DR16Q FITS file...")
+
+with fits.open(fits_path) as hdul:
+    raw_data = hdul[1].data
+    data_np = np.array(raw_data)
+    data_np.byteswap(inplace=True)
+    data_np = data_np.view(data_np.dtype.newbyteorder('='))
+
+######## we keep convinient naming conventions for ourselves
+
+    df = pd.DataFrame()
+    df["z"]             = data_np["Z"]
+    df["z_pca"]         = data_np["Z_PCA"]
+    df["psfmag_u"]      = data_np["PSFMAG"][:, 0]
+    df["psfmag_g"]      = data_np["PSFMAG"][:, 1]
+    df["psfmag_r"]      = data_np["PSFMAG"][:, 2]
+    df["psfmag_i"]      = data_np["PSFMAG"][:, 3]
+    df["psfmag_z"]      = data_np["PSFMAG"][:, 4]
+    df["mi"]            = data_np["M_I"]
+    df["w1_mag"]        = data_np["W1_MAG"]
+    df["w2_mag"]        = data_np["W2_MAG"]
+    df["w1_flux_snr"]   = data_np["W1_FLUX_SNR"]
+    df["w2_flux_snr"]   = data_np["W2_FLUX_SNR"]
+    df["sn_median_all"] = data_np["SN_MEDIAN_ALL"]
+    df["first_flux"]    = data_np["FIRST_FLUX"]
+    df["first_snr"]     = data_np["FIRST_SNR"]
+    df["first_matched"] = data_np["FIRST_MATCHED"]
+    df["rosat_src_flux"]= data_np["2RXS_SRC_FLUX"]
+    df["xmm_total_flux"]= data_np["XMM_TOTAL_FLUX"]
+    df["xmm_soft_flux"] = data_np["XMM_SOFT_FLUX"]
+    df["xmm_hard_flux"] = data_np["XMM_HARD_FLUX"]
+
+    df["dec"]      = data_np["DEC"]
+    df["ra"]       = data_np["RA"]
+    df["gaia_ra"]  = data_np["GAIA_RA"]
+    df["gaia_dec"] = data_np["GAIA_DEC"]
+    df["gaia_g_mag"]  = data_np["GAIA_G_MAG"]
+    df["gaia_bp_mag"] = data_np["GAIA_BP_MAG"]
+    df["gaia_rp_mag"] = data_np["GAIA_RP_MAG"]
+    df["fuv"]    = data_np["FUV"]
+    df["nuv"]    = data_np["NUV"]
+    df["y_flux"] = data_np["YFLUX"]
+    df["j_flux"] = data_np["JFLUX"]
+    df["h_flux"] = data_np["HFLUX"]
+    df["k_flux"] = data_np["KFLUX"]
+
+print("FITS columns loaded.")
+print(f"Raw catalogue size: {len(df):,} rows")
+
+
+######### sentinel cleaning block
+
+print("\n--- Applying sentinel cleaning (SENTINEL_CONFIG) ---")
+df = apply_sentinel_config(df, SENTINEL_CONFIG,
+                           mag_cols=MAG_COLS,
+                           mag_min=MAG_MIN, mag_max=MAG_MAX)
+
+# Derived colour indices AFTER cleaning
+
+df["ug"]   = df["psfmag_u"] - df["psfmag_g"]
+df["gr"]   = df["psfmag_g"] - df["psfmag_r"]
+df["ri"]   = df["psfmag_r"] - df["psfmag_i"]
+df["iz"]   = df["psfmag_i"] - df["psfmag_z"]
+df["w1w2"] = df["w1_mag"]   - df["w2_mag"]
+
+DERIVED_COLOUR_COLS = ["ug", "gr", "ri", "iz", "w1w2"]
+
+print("Building missingness flags ")
+FLAG_MAP = build_missingness_flags(df, SENTINEL_CONFIG)
+
+for c in DERIVED_COLOUR_COLS:
+    flag_col = f"{c}_missing"
+    df[flag_col] = df[c].isnull().astype(int)
+    FLAG_MAP[c] = flag_col
+
+print(f" Missingness flags created for {len(FLAG_MAP)} columns:")
+for col, fcol in FLAG_MAP.items():
+    n_missing = df[fcol].sum()
+    pct = 100.0 * n_missing / len(df)
+    print(f"  {fcol:<30s} {n_missing:>8,} ({pct:5.1f}% of full catalogue)")
+
+data = df.copy()
+print(f"\nDataset after sentinel cleaning: {len(data):,} rows")
+
+
+######### HERE WE APPLY FIRST GEOMETRIC MASK WITH RECTANGULAR APPROXIMATION (REFER https://sundog.stsci.edu/cgi-bin/firstcutout)
+
+def in_first_footprint(ra, dec):
+    ra  = np.asarray(ra,  dtype=float)
+    dec = np.asarray(dec, dtype=float)
+
+    # North: RA = 7.0h to 17.5h, Dec = -8.0 to +57.6 deg
+    north = (
+        (ra >= 105.0) & (ra <= 262.5) &
+        (dec >= -8.0) & (dec <= 57.6)
+    )
+
+    # South: RA = 20.4h to 4.0h, Dec = -11.5 to +15.4 deg
+    south_ra = ((ra >= 306.0) & (ra <= 360.0)) | ((ra >= 0.0) & (ra <= 60.0))
+    south = south_ra & (dec >= -11.5) & (dec <= 15.4)
+
+    return north | south
+
+
+data = data[data['psfmag_i'].notnull()].copy()
+data = data[(data['psfmag_i'] > 0) & (data['psfmag_i'] < 40)].copy()
+
+footprint_mask = in_first_footprint(data['ra'].values, data['dec'].values)
+data['in_first_footprint'] = footprint_mask.astype(int)
+
+n_in_footprint  = footprint_mask.sum()
+n_out_footprint = (~footprint_mask).sum()
+
+print("\n===== FIRST GEOMETRIC FOOTPRINT CLASSIFICATION =====")
+print(f"Quasars with valid psfmag_i : {len(data):,}")
+print(f"  Inside FIRST footprint    : {n_in_footprint:,} "
+      f"({100.0*n_in_footprint/len(data):.1f}%)")
+print(f"  Outside FIRST footprint   : {n_out_footprint:,} "
+      f"({100.0*n_out_footprint/len(data):.1f}%)")
+print(f"\nOnly in-footprint sources enter RL/RQ classification.")
+print(f"Out-of-footprint sources are excluded: no radio observation => "
+      f"non-detection is uninformative.")
+
+data_infp  = data[data['in_first_footprint'] == 1].copy().reset_index(drop=True)
+data_outfp = data[data['in_first_footprint'] == 0].copy().reset_index(drop=True)
+
+print(f"\nWorking sample (in-footprint): {len(data_infp):,} quasars")
+
+
+
+
+# FIRST DETECTION FLAG
+
+data_infp['first_detected'] = (data_infp['first_flux'] > 0).astype(int)
+det   = data_infp['first_detected'] == 1
+nodet = data_infp['first_detected'] == 0
+
+print("\n===== FIRST DETECTION STATS (in-footprint only) =====")
+print(f"In-footprint quasars           : {len(data_infp):,}")
+print(f"FIRST-detected   (flux > 0)    : {det.sum():,} "
+      f"({100.0*det.sum()/len(data_infp):.1f}%)")
+print(f"FIRST non-detected (flux <= 0) : {nodet.sum():,} "
+      f"({100.0*nodet.sum()/len(data_infp):.1f}%)")
+
+
+
+############ OPTICAL AND RADIO K CORRECTION (RICHARD ET AL., KELLERMAN ET AL., LYKE ET AL.)
+
+print("\n--- just a check :Computing K-corrected optical flux---")
+
+cosmo = FlatLambdaCDM(H0=67.6, Om0=0.31)
+
+z_for_dl   = data_infp['z'].values.copy()
+z_pca_vals = data_infp['z_pca'].values.copy()
+bad_z      = ~np.isfinite(z_for_dl) | (z_for_dl <= 0)
+z_for_dl[bad_z] = z_pca_vals[bad_z]
+bad_z2 = ~np.isfinite(z_for_dl) | (z_for_dl <= 0)
+z_for_dl[bad_z2] = 0.0
+
+d_L_mpc = cosmo.luminosity_distance(z_for_dl).value
+d_L_cm  = d_L_mpc * 3.085677581e24
+
+d_10pc_cm      = 10.0 * 3.085677581e18
+Z_REF          = 2.0
+log10_1pzref   = np.log10(1.0 + Z_REF)
+correction_mag = 2.5 * log10_1pzref
+
+mi_vals   = data_infp['mi'].values.copy()
+mi_valid  = np.isfinite(mi_vals)
+f_optical_kcorr = np.full(len(data_infp), np.nan)
+
+use_kcorr = mi_valid & (d_L_cm > 0)
+
+f_nu_10pc = 10.0 ** (-0.4 * (mi_vals[use_kcorr] + 48.60 + correction_mag))
+f_optical_kcorr[use_kcorr] = f_nu_10pc * (d_10pc_cm / d_L_cm[use_kcorr])**2
+f_optical_kcorr[use_kcorr] = f_optical_kcorr[use_kcorr] / 1e-23
+
+use_obs    = ~use_kcorr
+n_fallback = use_obs.sum()
+if n_fallback > 0:
+    print(f"  WARNING: {n_fallback:,} sources have missing mi — "
+          f"falling back to observed-frame psfmag_i flux for those sources.")
+
+f_optical_obs = 10.0 ** (-0.4 * (data_infp['psfmag_i'].values - 8.9))
+f_optical_kcorr[use_obs] = f_optical_obs[use_obs]
+
+data_infp['f_optical'] = f_optical_kcorr
+
+print(f"  Richards+2006 z=2 normalisation correction: "
+      f"2.5*log10(1+{Z_REF:.0f}) = {correction_mag:.5f} mag")
+print(f"  Cosmology: H0=67.6 km/s/Mpc, Om=0.31, OL=0.69 (Lyke+2020 DR16Q)")
+print(f"  f_optical range (Jy): "
+      f"{np.nanmin(f_optical_kcorr):.3e} – {np.nanmax(f_optical_kcorr):.3e} "
+      f"(median {np.nanmedian(f_optical_kcorr):.3e})")
+print(f"  Sources using K-corrected mi path       : {use_kcorr.sum():,}")
+print(f"  Sources using observed psfmag_i fallback: {n_fallback:,}")
+
+## RADIO CORRECTIONS. ABOVE BLOCK WAS OPTICAL
+
+RADIO_ALPHA  = -0.5
+nu_obs_GHz   = 1.4
+nu_rest_GHz  = 5.0
+z_radio      = z_for_dl.copy()
+K_radio      = (nu_rest_GHz / (nu_obs_GHz * (1.0 + z_radio))) ** RADIO_ALPHA
+
+data_infp['K_radio']    = K_radio
+data_infp['R_i']        = np.nan
+data_infp['R_i_upper']  = np.nan
+flux_limit_jy = FIRST_FLUX_LIMIT_mJy * 1e-3
+
+data_infp.loc[det,   'R_i'] = (
+    (data_infp.loc[det, 'first_flux'] * 1e-3 * data_infp.loc[det, 'K_radio'])
+    / (data_infp.loc[det, 'f_optical'] + eps)
+)
+data_infp.loc[nodet, 'R_i_upper'] = (
+    (flux_limit_jy * data_infp.loc[nodet, 'K_radio'])
+    / (data_infp.loc[nodet, 'f_optical'] + eps)
+)
+
+print(f"  Radio K-correction: alpha={RADIO_ALPHA}, nu_ref={nu_rest_GHz} GHz, "
+      f"nu_obs={nu_obs_GHz} GHz")
+print(f"  K_radio range: {K_radio.min():.3f} – {K_radio.max():.3f} "
+      f"(median {np.median(K_radio):.3f})")
+-
+# RL / RQ/ AMB CLASSIFICATION
+
+data_infp['source_class'] = 'AMBIGUOUS'
+
+rl_mask      = det   & (data_infp['R_i']       >  30)
+rq_det_mask  = det   & (data_infp['R_i']       <= 30)
+rq_nodet_mask= nodet & (data_infp['R_i_upper'] <= 30)
+rq_mask      = rq_det_mask | rq_nodet_mask
+amb_mask     = nodet & (data_infp['R_i_upper'] >  30)
+
+data_infp.loc[rl_mask,  'source_class'] = 'RL'
+data_infp.loc[rq_mask,  'source_class'] = 'RQ'
+
+####### FLUX SWEEP ROUTINE APPLIED HERE
+
+n_sweep          = len(FLUX_SWEEP_VALUES_mJy)
+min_votes_needed = int(np.ceil(VOTE_FRACTION_THRESHOLD * n_sweep))
+
+print(f"\n===== CHECK:FLUX-SWEEP RQ PROMOTION (ambiguous sources only) =====")
+print(f"Sweep flux limits        : {FLUX_SWEEP_VALUES_mJy} mJy")
+print(f"Number of sweep values   : {n_sweep}")
+print(f"Vote fraction threshold  : {VOTE_FRACTION_THRESHOLD:.4f} "
+      f"(= {min_votes_needed}/{n_sweep} votes needed)")
+print(f"Central flux limit (ref) : {FIRST_FLUX_LIMIT_mJy} mJy")
+
+amb_indices    = data_infp.index[amb_mask].tolist()
+n_amb_raw      = len(amb_indices)
+print(f"Ambiguous sources entering sweep : {n_amb_raw:,}")
+
+K_radio_amb   = data_infp.loc[amb_indices, 'K_radio'].values
+f_optical_amb = data_infp.loc[amb_indices, 'f_optical'].values
+
+rq_vote_counts   = np.zeros(n_amb_raw, dtype=int)
+sweep_detail_rows = []
+
+for fl_mJy in FLUX_SWEEP_VALUES_mJy:
+    fl_jy              = fl_mJy * 1e-3
+    R_i_upper_sweep    = (fl_jy * K_radio_amb) / (f_optical_amb + eps)
+    rq_vote_this_limit = (R_i_upper_sweep <= 30).astype(int)
+    rq_vote_counts    += rq_vote_this_limit
+    n_rq_this          = rq_vote_this_limit.sum()
+    sweep_detail_rows.append({
+        'Flux limit (mJy)'        : fl_mJy,
+        'RQ votes at this limit'  : n_rq_this,
+        'Fraction of amb pool (%)': 100.0 * n_rq_this / n_amb_raw,
+    })
+
+print(f"\n{'Flux limit (mJy)':<20} {'RQ votes':>10} {'% of amb pool':>15}")
+print(f"  {'-'*45}")
+for row in sweep_detail_rows:
+    print(f"  {row['Flux limit (mJy)']:<18.2f} "
+          f"{row['RQ votes at this limit']:>10,} "
+          f"{row['Fraction of amb pool (%)']:>14.1f}%")
+
+vote_fraction_per_source       = rq_vote_counts / n_sweep
+rq_sweep_promotion_mask_local  = vote_fraction_per_source >= VOTE_FRACTION_THRESHOLD WHICH CAN BE SET IN THE USER CONTROLS
+n_promoted                     = rq_sweep_promotion_mask_local.sum()
+
+promoted_indices = [amb_indices[k]
+                    for k in range(n_amb_raw) if rq_sweep_promotion_mask_local[k]]
+
+data_infp.loc[promoted_indices, 'source_class'] = 'RQ'
+
+data_infp['sweep_rq_votes']      = np.nan
+data_infp['sweep_vote_fraction'] = np.nan
+data_infp.loc[amb_indices, 'sweep_rq_votes']     = rq_vote_counts
+data_infp.loc[amb_indices, 'sweep_vote_fraction'] = vote_fraction_per_source
+
+rq_mask_final  = data_infp['source_class'] == 'RQ'
+amb_mask_final = data_infp['source_class'] == 'AMBIGUOUS'
+
+n_rl       = rl_mask.sum()
+n_rq_conf  = rq_mask.sum()
+n_rq_sweep = n_promoted
+n_rq_total = rq_mask_final.sum()
+n_amb      = amb_mask_final.sum()
+
+print(f"\n===== IN-FOOTPRINT CATALOGUE — THREE-WAY CLASSIFICATION (AFTWER SWEEPING) =====")
+print(f"Total (in FIRST footprint, valid psfmag_i)  : {len(data_infp):,}")
+print(f"  RADIO-LOUD (RL)  R_i > 30                 : "
+      f"{n_rl:,} ({100*n_rl/len(data_infp):.2f}%)")
+print(f"  RADIO-QUIET (RQ) total pool               : "
+      f"{n_rq_total:,} ({100*n_rq_total/len(data_infp):.2f}%)")
+print(f"    of which FIRST-detected R_i <= 30        : {rq_det_mask.sum():,}")
+print(f"    of which non-detected R_upper <= 30      : {rq_nodet_mask.sum():,}")
+print(f"    of which promoted via flux sweep "
+      f"(>= {min_votes_needed}/{n_sweep} votes)     : {n_rq_sweep:,}")
+print(f"  AMBIGUOUS (AMB) < {min_votes_needed}/{n_sweep} votes, excluded : "
+      f"{n_amb:,} ({100*n_amb/len(data_infp):.2f}%)")
+print(f"\n[v21] Out-of-footprint sources excluded from RL/RQ pool: "
+      f"{n_out_footprint:,} "
+      f"({100.0*n_out_footprint/len(data):.1f}% of full valid catalogue)")
+print(f"  (no radio observation => non-detection is uninformative)")
+print(f"\nReference FIRST flux limit : {FIRST_FLUX_LIMIT_mJy} mJy")
+print(f"Flux sweep range           : {min(FLUX_SWEEP_VALUES_mJy):.2f} – "
+      f"{max(FLUX_SWEEP_VALUES_mJy):.2f} mJy "
+      f"({n_sweep} values)")
+print(f"Vote fraction threshold    : {VOTE_FRACTION_THRESHOLD:.4f} "
+      f"(>= {min_votes_needed}/{n_sweep} RQ votes needed to promote)")
+
+print("\n===== R_i upper-bound stats (non-detections, in-footprint, central limit) =====")
+print(data_infp.loc[nodet, 'R_i_upper'].describe())
+print(f"R_i_upper <= 30 "
+      f"-> confirmed RQ       : {(data_infp.loc[nodet,'R_i_upper'] <= 30).sum():,}")
+print(f"R_i_upper > 30, sweep votes >= {min_votes_needed}/{n_sweep} "
+      f"-> promoted RQ        : {n_rq_sweep:,}")
+print(f"R_i_upper > 30, sweep votes <  {min_votes_needed}/{n_sweep} "
+      f"-> AMBIGUOUS          : {n_amb:,}")
+
+print("\n===== FLUX-SWEEP VOTE DISTRIBUTION (ambiguous sources) =====")
+print(f"  {'RQ votes':>10} {'N sources':>12} {'% of amb pool':>15} "
+      f"{'Promoted?':>12}")
+print(f"  {'-'*55}")
+for v in range(n_sweep + 1):
+    n_at_v    = (rq_vote_counts == v).sum()
+    pct_at_v  = 100.0 * n_at_v / n_amb_raw if n_amb_raw > 0 else 0.0
+    promoted_str = ('YES' if v >= min_votes_needed else 'no')
+    print(f"  {v:>10} {n_at_v:>12,} {pct_at_v:>14.1f}% {promoted_str:>12}")
+
+if n_rq_sweep > 0:
+    print(f"\n  R_i_upper stats (central limit) for sweep-promoted sources:")
+    print(data_infp.loc[promoted_indices, 'R_i_upper'].describe().round(4))
+    print(f"\n  Vote fraction stats for sweep-promoted sources:")
+    print(data_infp.loc[promoted_indices, 'sweep_vote_fraction'].describe().round(4))
+
+data = data_infp.copy()
+
+
+
+# SUBSAMPLE SELECTION WITH FIRST GEOMETRIC MASK
+
+data['Radio_Loud'] = (data['source_class'] == 'RL').astype(int)
+rl_sample = data[data['source_class'] == 'RL'].copy()
+rq_pool   = data[data['source_class'] == 'RQ'].copy()
+
+n_rq_draw = int(np.round(len(rq_pool) * RQ_FRACTION))
+rq_sample = rq_pool.sample(n=n_rq_draw, random_state=RANDOM_SEED,
+                            replace=False).copy()
+
+data_sub = pd.concat([rl_sample, rq_sample], ignore_index=True)
+data_sub = data_sub.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
+
+n_rl_sub = (data_sub['Radio_Loud'] == 1).sum()
+n_rq_sub = (data_sub['Radio_Loud'] == 0).sum()
+
+print("\n===== SUBSAMPLE (in-footprint RL + RQ only) =====")
+print(f"RQ_FRACTION       : {RQ_FRACTION}")
+print(f"In-footprint RL   : {n_rl:,} | In-footprint RQ pool: {len(rq_pool):,}")
+print(f"Out-of-footprint  : {n_out_footprint:,} (excluded — no radio coverage)")
+print(f"AMB excluded      : {n_amb:,} "
+      f"(sweep votes < {min_votes_needed}/{n_sweep})")
+print(f"RL: {n_rl_sub:,}  RQ: {n_rq_sub:,}  Total: {len(data_sub):,} "
+      f"RL fraction: {n_rl_sub/len(data_sub):.4f}")
+
+
+
+# FEATURE BASE DEFINITION (FEATURES + MISSINGNESS FLAGS)
+
+features_base = [
+    # OPTICAL FEATURES
+    'psfmag_u', 'psfmag_u_missing',
+    'psfmag_g', 'psfmag_g_missing',
+    'psfmag_r', 'psfmag_r_missing',
+    'psfmag_i', 'psfmag_i_missing',
+    'psfmag_z', 'psfmag_z_missing',
+
+    # COLORS
+    'ug', 'ug_missing',
+    'gr', 'gr_missing',
+    'ri', 'ri_missing',
+    'iz', 'iz_missing',
+
+    # IMPORTANT FEATURES (DETECTOR EFFECTS ALSO)
+    'mi', 'mi_missing',
+    'z_pca', 'z_pca_missing',
+    'sn_median_all', 'sn_median_all_missing',
+
+    # WISE
+    'w1_mag', 'w1_mag_missing',
+    'w2_mag', 'w2_mag_missing',
+    'w1w2', 'w1w2_missing',
+    'w1_flux_snr', 'w1_flux_snr_missing',
+    'w2_flux_snr', 'w2_flux_snr_missing',
+
+    # X-ray FEATURES
+    'rosat_src_flux', 'rosat_src_flux_missing',
+    'xmm_total_flux', 'xmm_total_flux_missing',
+    'xmm_soft_flux',  'xmm_soft_flux_missing',
+    'xmm_hard_flux',  'xmm_hard_flux_missing',
+
+    # Gaia
+    #'dec',                                    ###### included for checks. we do not include this in our study
+    #'ra',
+    #'gaia_ra',     'gaia_ra_missing',
+    #'gaia_dec',    'gaia_dec_missing',
+    'gaia_g_mag',  'gaia_g_mag_missing',
+    'gaia_bp_mag', 'gaia_bp_mag_missing',
+    'gaia_rp_mag', 'gaia_rp_mag_missing',
+
+    #GALEX ─
+    'fuv', 'fuv_missing',
+    'nuv', 'nuv_missing',
+
+    # UKIDSS
+    'y_flux', 'y_flux_missing',
+    'j_flux', 'j_flux_missing',
+    'h_flux', 'h_flux_missing',
+    'k_flux', 'k_flux_missing',
+]
+
+meas_cols_base = [f for f in features_base if not f.endswith('_missing')]
+
+missing_from_sub = [f for f in features_base if f not in data_sub.columns]
+if missing_from_sub:
+    print(f"\n[FATAL] The following columns in features_base are absent from "
+          f"data_sub:\n  {missing_from_sub}")
+    print("Check that SENTINEL_CONFIG and FLAG_MAP were applied before subsampling.")
+    raise KeyError(f"Missing features: {missing_from_sub}")
+
+
+########### HERE WE CHECK THE QUALITY OF OUR DATASET AFTER SENTINELS
+
+print("\n")
+print("=" * 110)
+print(" QUASAR POOL DATA QUALITY TABLE")
+print(f" Total quasars in RL+RQ pool: {len(data_sub):,} "
+      f"(RL={n_rl_sub:,}, RQ={n_rq_sub:,})")
+print("=" * 110)
+
+rl_mask_sub = data_sub['Radio_Loud'] == 1
+rq_mask_sub = data_sub['Radio_Loud'] == 0
+
+hdr = (f"  {'Feature':<22} {'N_valid':>8} {'N_missing':>10} "
+       f"{'Pct_valid':>10} {'Pct_miss':>9} "
+       f"{'RL_valid':>9} {'RL_miss':>8} "
+       f"{'RQ_valid':>9} {'RQ_miss':>8} {'Flag column'}")
+print(hdr)
+print("  " + "-" * 107)
+
+for col in meas_cols_base:
+    flag_col = f"{col}_missing"
+
+    if flag_col in data_sub.columns:
+        n_miss = int(data_sub[flag_col].sum())
+    else:
+        n_miss   = int(data_sub[col].isnull().sum())
+        flag_col = "(NaN count)"
+
+    n_total  = len(data_sub)
+    n_valid  = n_total - n_miss
+    pct_valid = 100.0 * n_valid / n_total
+    pct_miss  = 100.0 * n_miss  / n_total
+
+    if flag_col != "(NaN count)":
+        rl_miss = int(data_sub.loc[rl_mask_sub, flag_col].sum())
+        rq_miss = int(data_sub.loc[rq_mask_sub, flag_col].sum())
+    else:
+        rl_miss = int(data_sub.loc[rl_mask_sub, col].isnull().sum())
+        rq_miss = int(data_sub.loc[rq_mask_sub, col].isnull().sum())
+
+    rl_valid = n_rl_sub - rl_miss
+    rq_valid = n_rq_sub - rq_miss
+
+    print(f"  {col:<22} {n_valid:>8,} {n_miss:>10,} "
+          f"{pct_valid:>9.1f}% {pct_miss:>8.1f}% "
+          f"{rl_valid:>9,} {rl_miss:>8,} "
+          f"{rq_valid:>9,} {rq_miss:>8,}  {flag_col}")
+
+
+####### PRINT CHECKS
+
+print("  " + "-" * 107)
+print(f"\n  Legend:")
+print(f"  N_valid    = quasars with a real measurement (missingness flag = 0)")
+print(f"  N_missing  = quasars where sentinel/NaN was detected (flag = 1)")
+print(f"  RL_valid / RL_miss = counts within the Radio-Loud subset")
+print(f"  RQ_valid / RQ_miss = counts within the Radio-Quiet subset")
+print(f"  Flag column = binary indicator column propagated into the ML pipeline")
+print("=" * 110)
+
+
+
+#  TRAIN / VAL / TEST SPLIT
+
+X_raw = data_sub[features_base].copy()
+y     = data_sub['Radio_Loud'].copy()
+
+train_val_idx, test_idx = train_test_split(
+    np.arange(len(X_raw)), test_size=0.3,
+    random_state=RANDOM_SEED, stratify=y)
+X_train_val = X_raw.iloc[train_val_idx].reset_index(drop=True)
+y_train_val = y.iloc[train_val_idx].reset_index(drop=True)
+X_test      = X_raw.iloc[test_idx].reset_index(drop=True)
+y_test      = y.iloc[test_idx].reset_index(drop=True)
+
+train_idx_split, val_idx_split = train_test_split(
+    np.arange(len(X_train_val)), test_size=0.3,
+    random_state=RANDOM_SEED, stratify=y_train_val)
+X_train = X_train_val.iloc[train_idx_split].reset_index(drop=True)
+X_val   = X_train_val.iloc[val_idx_split].reset_index(drop=True)
+y_train = y_train_val.iloc[train_idx_split].reset_index(drop=True)
+y_val   = y_train_val.iloc[val_idx_split].reset_index(drop=True)
+
+print(f"\n--- Split ---  Train:{len(X_train):,}  Val:{len(X_val):,}  "
+      f"Test:{len(X_test):,}")
+
+
+
+# NaN IMPUTATION (IMPORTANT FOR REGRESSION AND PCA AS THEY DONT SEE NANS)
+
+impute_cols   = [c for c in features_base if not c.endswith('_missing')]
+train_medians = {}
+
+for col in impute_cols:
+    median_val        = X_train[col].median()
+    train_medians[col] = median_val
+    X_train[col] = X_train[col].fillna(median_val)
+    X_val[col]   = X_val[col].fillna(median_val)
+    X_test[col]  = X_test[col].fillna(median_val)
+
+assert X_train.isnull().sum().sum() == 0, "NaN remains in X_train after imputation!"
+assert X_val.isnull().sum().sum()   == 0, "NaN remains in X_val after imputation!"
+assert X_test.isnull().sum().sum()  == 0, "NaN remains in X_test after imputation!"
+print("  Imputation complete — zero NaN in all splits. ✓")
+
+
+# ===========================================================================
+# 8. SCALING + PCA
+# ===========================================================================
+# ---------------------------------------------------------------------------
+# WE HAVE KEPT THIS SECTION AS REFERNCE FOR HANDLING THE MISSINGNESS FLAGS:
+# PCA is fitted on MEASUREMENT FEATURES ONLY
+# Missingness information is still available to all three classifiers:
+#  PARTICULARY IN SEC 11 ONE CAN SEE THAT
+#   - LR on PCA : the scaled flag columns are appended to the PCA
+#                 projections so LR sees both the
+#                 physical PC coordinates and the missingness context.
+
+
+
+meas_cols_pca    = [f for f in features_base if not f.endswith('_missing')]
+flag_cols_pca    = [f for f in features_base if f.endswith('_missing')]
+
+
+scaler          = StandardScaler()
+X_train_scaled  = scaler.fit_transform(X_train[features_base])
+X_val_scaled    = scaler.transform(X_val[features_base])
+X_test_scaled   = scaler.transform(X_test[features_base])
+
+
+meas_col_indices = [features_base.index(c) for c in meas_cols_pca]
+flag_col_indices = [features_base.index(c) for c in flag_cols_pca]
+
+# WE SLICE OUT MEASUREMENT COLUMNS TO FIT PCA
+
+X_train_scaled_meas = X_train_scaled[:, meas_col_indices]
+X_val_scaled_meas   = X_val_scaled[:,   meas_col_indices]
+X_test_scaled_meas  = X_test_scaled[:,  meas_col_indices]
+
+# MISSINGNESS FLAGS ARE SLICED HERE TO APPEND LATER
+
+X_train_scaled_flags = X_train_scaled[:, flag_col_indices]
+X_val_scaled_flags   = X_val_scaled[:,   flag_col_indices]
+X_test_scaled_flags  = X_test_scaled[:,  flag_col_indices]
+
+X_train_audit = pd.DataFrame(X_train_scaled, columns=features_base)
+audit_features(
+    X_train_audit,
+    cols=meas_cols_pca,
+    label="POST-SCALING AUDIT (training set) — check for -inf, extreme values"
+)
+
+n_inf_total = np.isinf(X_train_scaled).sum()
+n_nan_total = np.isnan(X_train_scaled).sum()
+
+if n_inf_total > 0 or n_nan_total > 0:
+    print(f"  WARNING: {n_inf_total} Inf and {n_nan_total} NaN values in "
+          f"scaled training data — PCA will be unreliable!")
+    print("  Fix: check SENTINEL_CONFIG and re-run.")
+else:
+    print("  You are safe friend , there are no Inf or NaN values found. ")
+
+
+pca          = PCA(n_components=7, random_state=RANDOM_SEED)
+X_train_pca  = pca.fit_transform(X_train_scaled_meas)   # shape: (n_train, 7)
+X_val_pca    = pca.transform(X_val_scaled_meas)          # shape: (n_val,   7)
+X_test_pca   = pca.transform(X_test_scaled_meas)         # shape: (n_test,  7)
+
+print("\nPCA variance ratios (first 7):",
+      np.round(pca.explained_variance_ratio_[:7], 4))
+
+
+
+######### THIS SECTIONS HAS ALL PLOT SETUPS
+
+
+meas_cols    = meas_cols_pca
+missing_cols = flag_cols_pca
+n_meas       = len(meas_cols)
+# meas_idx here indexes into features_base (for correlation heatmap on scaled df)
+meas_idx     = meas_col_indices
+X_train_scaled_df = pd.DataFrame(X_train_scaled, columns=features_base)
+
+
+####### FEATURE COORELATION HEATMAP
+
+corr_meas_df = X_train_scaled_df[meas_cols].corr(method='pearson')
+
+fig_hm, ax_hm = plt.subplots(figsize=(n_meas * 0.70 + 1.5, n_meas * 0.65 + 1.5))
+im = ax_hm.imshow(corr_meas_df.values, vmin=-1, vmax=1,
+                  cmap='RdBu_r', aspect='auto', interpolation='none')
+cbar_hm = plt.colorbar(im, ax=ax_hm, fraction=0.035, pad=0.02)
+cbar_hm.set_label('Pearson r', fontsize=11)
+cbar_hm.ax.tick_params(labelsize=9)
+ax_hm.set_xticks(range(n_meas))
+ax_hm.set_yticks(range(n_meas))
+ax_hm.set_xticklabels(meas_cols, rotation=45, ha='right', fontsize=8)
+ax_hm.set_yticklabels(meas_cols, fontsize=8)
+
+for ri in range(n_meas):
+    for ci in range(n_meas):
+        val = corr_meas_df.iloc[ri, ci]
+        if abs(val) > 0.30:
+            text_col = 'white' if abs(val) > 0.70 else 'black'
+            ax_hm.text(ci, ri, f'{val:.2f}', ha='center', va='center',
+                       fontsize=6, color=text_col, fontweight='bold')
+
+ax_hm.set_title(
+    f'Feature Correlation Heatmap — measurement features\n'
+    f'(training set, n = {len(X_train_scaled_df):,}; annotated where |r| > 0.30)',
+    fontsize=11, pad=10)
+plt.tight_layout(); plt.show()
+
+corr_upper  = corr_meas_df.copy()
+np.fill_diagonal(corr_upper.values, np.nan)
+corr_stack  = (corr_upper.abs().stack().reset_index()
+               .rename(columns={'level_0': 'Feature A', 'level_1': 'Feature B', 0: '|r|'}))
+corr_stack  = corr_stack[corr_stack['Feature A'] < corr_stack['Feature B']]
+corr_stack  = corr_stack.sort_values('|r|', ascending=False)
+print('\nTop 10 strongest pairwise correlations (measurement features):')
+print(corr_stack.head(10).to_string(index=False))
+
+
+#### COMPONENT LOADING
+
+
+loadings   = pca.components_          # shape: (7, n_meas)
+n_pcs      = pca.n_components_
+pc_labels_hm = [f'PC{k+1}\n({pca.explained_variance_ratio_[k]*100:.1f}%)'
+                for k in range(n_pcs)]
+
+fig_ld, ax_ld = plt.subplots(figsize=(n_meas * 0.72 + 1.5, n_pcs * 0.72 + 1.5))
+vmax_ld = np.abs(loadings).max()
+im_ld   = ax_ld.imshow(loadings, vmin=-vmax_ld, vmax=vmax_ld,
+                        cmap='RdBu_r', aspect='auto', interpolation='none')
+cbar_ld = plt.colorbar(im_ld, ax=ax_ld, fraction=0.025, pad=0.02)
+cbar_ld.set_label('Loading coefficient', fontsize=11)
+cbar_ld.ax.tick_params(labelsize=9)
+ax_ld.set_xticks(range(n_meas))
+ax_ld.set_yticks(range(n_pcs))
+ax_ld.set_xticklabels(meas_cols, rotation=45, ha='right', fontsize=8)
+ax_ld.set_yticklabels(pc_labels_hm, fontsize=9)
+
+for ri in range(n_pcs):
+    for ci in range(n_meas):
+        val      = loadings[ri, ci]
+        text_col = 'white' if abs(val) > 0.55 * vmax_ld else 'black'
+        ax_ld.text(ci, ri, f'{val:+.2f}', ha='center', va='center',
+                   fontsize=6.5, color=text_col, fontweight='bold')
+
+ax_ld.set_xlabel('Feature', fontsize=11, labelpad=28)
+ax_ld.set_ylabel('Principal Component', fontsize=11)
+ax_ld.set_title(
+    'PCA Component Loadings — contribution of each feature to PC1–PC7\n'
+    '(row = eigenvector; colour = loading coefficient; dashed lines = feature groups)',
+    fontsize=11, pad=10)
+plt.tight_layout(); plt.show()
+
+loadings_df = pd.DataFrame(loadings,
+                            index=[f'PC{k+1}' for k in range(n_pcs)],
+                            columns=meas_cols)
+print('\nPCA Loadings Table (measurement features):')
+print(loadings_df.round(3).to_string())
+print('\nDominant feature(s) per PC (|loading| > 0.35):')
+for k in range(n_pcs):
+    dominant = [(meas_cols[ci], loadings[k, ci])
+                for ci in range(n_meas) if abs(loadings[k, ci]) > 0.35]
+    dominant.sort(key=lambda x: abs(x[1]), reverse=True)
+    dominant_str = ', '.join(f'{f}({v:+.3f})' for f, v in dominant)
+    print(f'  PC{k+1}: {dominant_str if dominant_str else "none above threshold"}')
+
+
+### explained variance
+
+individual_var = pca.explained_variance_ratio_ * 100
+cumulative_var = np.cumsum(individual_var)
+pc_labels_var  = [f'PC{k+1}' for k in range(n_pcs)]
+
+fig_var, ax_bar = plt.subplots(figsize=(max(6, n_pcs * 1.0), 5))
+bars = ax_bar.bar(pc_labels_var, individual_var, color='steelblue', alpha=0.82,
+                  edgecolor='white', linewidth=0.8, zorder=2, label='Individual')
+for bar, val in zip(bars, individual_var):
+    ax_bar.text(bar.get_x() + bar.get_width()/2.0, bar.get_height() + 0.35,
+                f'{val:.1f}%', ha='center', va='bottom',
+                fontsize=9, fontweight='bold', color='steelblue')
+ax_bar.set_xlabel('Principal Component', fontsize=13)
+ax_bar.set_ylabel('Individual explained variance (%)', fontsize=12, color='steelblue')
+ax_bar.tick_params(axis='y', labelcolor='steelblue', labelsize=9)
+ax_bar.set_ylim(0, individual_var.max() * 1.30)
+ax_bar.grid(axis='y', alpha=0.30, zorder=1)
+ax_cum = ax_bar.twinx()
+ax_cum.plot(pc_labels_var, cumulative_var, color='crimson', marker='o',
+            markersize=7, linewidth=2.0, zorder=3, label='Cumulative')
+for k, (xk, yk) in enumerate(zip(pc_labels_var, cumulative_var)):
+    ax_cum.text(k, yk + 1.4, f'{yk:.1f}%', ha='center', va='bottom',
+                fontsize=8, color='crimson')
+for ref_pct, ref_ls, ref_lbl in [(80, '--', '80% threshold'), (90, ':', '90% threshold')]:
+    ax_cum.axhline(ref_pct, color='grey', lw=1.0, ls=ref_ls, alpha=0.65, label=ref_lbl)
+ax_cum.set_ylabel('Cumulative explained variance (%)', fontsize=12, color='crimson')
+ax_cum.tick_params(axis='y', labelcolor='crimson', labelsize=9)
+ax_cum.set_ylim(0, 112)
+lines_bar, lbls_bar = ax_bar.get_legend_handles_labels()
+lines_cum, lbls_cum = ax_cum.get_legend_handles_labels()
+ax_bar.legend(lines_bar + lines_cum, lbls_bar + lbls_cum, fontsize=9, loc='center right')
+ax_bar.set_title(
+    f'PCA Explained Variance '
+    f'(cumulative over {n_pcs} components = {cumulative_var[-1]:.1f}%)',
+    fontsize=12, pad=10)
+plt.tight_layout(); plt.show()
+
+print('\nPCA Explained Variance Summary:')
+print(f"{'PC':<5} {'Individual (%)':>16} {'Cumulative (%)':>16}")
+print('-' * 42)
+for k in range(n_pcs):
+    print(f"{'PC'+str(k+1):<5} {individual_var[k]:>16.2f} {cumulative_var[k]:>16.2f}")
+print(f"\nTotal variance captured by {n_pcs} PCs: {cumulative_var[-1]:.2f}%")
+
+
+########## FInally we get to the main part. Lets start with RF
+
+
+rf = RandomForestClassifier(n_estimators=200, random_state=RANDOM_SEED,
+                             class_weight='balanced')
+rf.fit(X_train_scaled, y_train)
+y_proba_rf_val = rf.predict_proba(X_val_scaled)[:, 1]
+y_proba_rf     = rf.predict_proba(X_test_scaled)[:, 1]
+best_th_rf     = find_best_threshold(y_val, y_proba_rf_val)
+y_pred_rf      = (y_proba_rf >= best_th_rf).astype(int)
+print(f"\nRF Best Threshold: {best_th_rf:.4f}")
+
+
+##### xgb
+
+
+scale_pos_weight = (y_train == 0).sum() / (y_train == 1).sum()
+xgb_clf = xgb.XGBClassifier(
+    n_estimators=300, learning_rate=0.05, max_depth=6,
+    subsample=0.8, colsample_bytree=0.8, random_state=RANDOM_SEED,
+    use_label_encoder=False, eval_metric='auc',
+    scale_pos_weight=scale_pos_weight)
+xgb_clf.fit(X_train_scaled, y_train)
+y_proba_xgb_val = xgb_clf.predict_proba(X_val_scaled)[:, 1]
+y_proba_xgb     = xgb_clf.predict_proba(X_test_scaled)[:, 1]
+best_th_xgb     = find_best_threshold(y_val, y_proba_xgb_val)
+y_pred_xgb      = (y_proba_xgb >= best_th_xgb).astype(int)
+print(f"XGB Best Threshold: {best_th_xgb:.4f}")
+
+
+
+# 11. LR
+
+results     = []
+results_val = []
+roc_cache   = {}
+pairs       = list(itertools.combinations(range(X_train_pca.shape[1]), 2))
+print(f"\nRunning PCA + LR (degree={LR_DEGREE}) on {len(pairs)} pairs...\n")
+print(f"  [FIX] Missingness flags ({len(flag_cols_pca)} columns) appended to each "
+      f"PC pair before LR fitting (linear flags).\n")
+
+for (i, j) in pairs:
+    
+    X_train_pair_pca = X_train_pca[:, [i, j]]
+    X_val_pair_pca   = X_val_pca[:,   [i, j]]
+    X_test_pair_pca  = X_test_pca[:,  [i, j]]
+
+    
+    poly          = PolynomialFeatures(degree=LR_DEGREE, include_bias=False)
+    X_train_poly  = poly.fit_transform(X_train_pair_pca)
+    X_val_poly    = poly.transform(X_val_pair_pca)
+    X_test_poly   = poly.transform(X_test_pair_pca)
+
+  
+    X_train_lr = np.hstack([X_train_poly, X_train_scaled_flags])
+    X_val_lr   = np.hstack([X_val_poly,   X_val_scaled_flags])
+    X_test_lr  = np.hstack([X_test_poly,  X_test_scaled_flags])
+
+    lr_pca = LogisticRegression(max_iter=1000, random_state=RANDOM_SEED,
+                                 solver='liblinear', class_weight='balanced')
+    lr_pca.fit(X_train_lr, y_train)
+
+    y_proba_lr_val = lr_pca.predict_proba(X_val_lr)[:, 1]
+    y_proba_lr     = lr_pca.predict_proba(X_test_lr)[:, 1]
+    best_th_lr     = find_best_threshold(y_val, y_proba_lr_val)
+
+    y_pred_lr_val = (y_proba_lr_val >= best_th_lr).astype(int)
+    y_pred_lr     = (y_proba_lr     >= best_th_lr).astype(int)
+
+    fpr, tpr, _ = roc_curve(y_test, y_proba_lr)
+    auc_val     = auc(fpr, tpr)
+    pair_name   = f"PC{i+1}-PC{j+1}"
+    roc_cache[pair_name] = (fpr, tpr, auc_val)
+
+    results.append({
+        "PC Pair"       : pair_name,
+        "Accuracy"      : accuracy_score(y_test, y_pred_lr),
+        "Precision"     : precision_score(y_test, y_pred_lr, zero_division=0),
+        "Recall"        : recall_score(y_test, y_pred_lr),
+        "F1"            : f1_score(y_test, y_pred_lr),
+        "AUC"           : auc_val,
+        "Predicted Loud": int((y_pred_lr == 1).sum()),
+        "Correct Loud"  : int(((y_test == 1) & (y_pred_lr == 1)).sum()),
+        "Total Loud"    : int((y_test == 1).sum()),
+        "Threshold"     : best_th_lr,
+        "_lr_model"     : lr_pca,
+        "_poly"         : poly,
+        "_i"            : i,
+        "_j"            : j,
+    })
+
+    fpr_val, tpr_val, _ = roc_curve(y_val, y_proba_lr_val)
+    auc_val_val         = auc(fpr_val, tpr_val)
+    results_val.append({
+        "PC Pair"  : pair_name,
+        "Accuracy" : accuracy_score(y_val, y_pred_lr_val),
+        "Precision": precision_score(y_val, y_pred_lr_val, zero_division=0),
+        "Recall"   : recall_score(y_val, y_pred_lr_val),
+        "F1"       : f1_score(y_val, y_pred_lr_val),
+        "AUC"      : auc_val_val,
+    })
+
+summary_df      = pd.DataFrame(results).set_index("PC Pair")
+#summary_val_df  = pd.DataFrame(results_val).set_index("PC Pair")            ########## here we have separately used the val set for few checks. this does not do information leakage since we only report never seen test set
+
+#summary_val_sorted = summary_val_df.sort_values(by=SORT_BY, ascending=False)
+#best_pair_name     = summary_val_sorted.index[0]
+#best_pca           = summary_df.loc[best_pair_name]
+
+summary_sorted     = summary_df.sort_values(by=SORT_BY, ascending=False)
+
+display_cols = ["Accuracy", "Precision", "Recall", "F1", "AUC",
+                "Predicted Loud", "Correct Loud", "Total Loud", "Threshold"]
+#print(f"\n===== PCA + LR (degree={LR_DEGREE}) — Validation-set ranking =====")
+print(summary_val_sorted[["Accuracy", "Precision", "Recall", "F1", "AUC"]].round(4))
+
+print(f"\n===== PCA + LR (degree={LR_DEGREE}) — Test-set results =====")
+print(summary_sorted[display_cols].round(4))
+
+#print(f"\n===== Best pair chosen by VAL {SORT_BY}: {best_pair_name} =====")
+#print(f"  Validation {SORT_BY} : "
+#      f"{summary_val_df.loc[best_pair_name, SORT_BY]:.4f}")
+print(f"  Test-set metrics for this pair (reported once):")
+for col in display_cols[:-1]:
+    print(f"    {col:<18}: {best_pca[col]:.4f}" if isinstance(best_pca[col], float)
+          else f"    {col:<18}: {best_pca[col]}")
+
+correct_rf  = ((y_test == 1) & (y_pred_rf  == 1)).sum()
+correct_xgb = ((y_test == 1) & (y_pred_xgb == 1)).sum()
+print(f"\n===== Correct RLQs on Test Set (total true RL = {y_test.sum():,}) =====")
+print(f"RF  (Th={best_th_rf:.4f})  : {correct_rf:,}")
+print(f"XGB (Th={best_th_xgb:.4f}) : {correct_xgb:,}")
+print(f"Best PCA+LR ({best_pca.name}, Th={best_pca['Threshold']:.4f}): "
+      f"{int(best_pca['Correct Loud']):,}")
+
+
+####### roc curves and confusion matrix
+
+best_pair = best_pca.name
+nums      = re.findall(r'\d+', best_pair)
+i_best, j_best = int(nums[0])-1, int(nums[1])-1
+
+lr_best_final    = best_pca["_lr_model"]
+poly_best        = best_pca["_poly"]
+
+
+X_test_poly_best = poly_best.transform(X_test_pca[:, [i_best, j_best]])
+X_test_lr_best   = np.hstack([X_test_poly_best, X_test_scaled_flags])
+y_proba_lr_best  = lr_best_final.predict_proba(X_test_lr_best)[:, 1]
+y_pred_lr_best   = (y_proba_lr_best >= best_pca['Threshold']).astype(int)
+
+fpr_lr,  tpr_lr  = roc_cache[best_pair][:2]; auc_lr  = roc_cache[best_pair][2]
+fpr_rf,  tpr_rf,  _ = roc_curve(y_test, y_proba_rf);  auc_rf  = auc(fpr_rf,  tpr_rf)
+fpr_xgb, tpr_xgb, _ = roc_curve(y_test, y_proba_xgb); auc_xgb = auc(fpr_xgb, tpr_xgb)
+
+plt.figure(figsize=(8, 6))
+plt.plot(fpr_rf,  tpr_rf,  label=f'Random Forest (AUC={auc_rf:.3f})',  lw=2)
+plt.plot(fpr_xgb, tpr_xgb, label=f'XGBoost (AUC={auc_xgb:.3f})',       lw=2)
+plt.plot(fpr_lr,  tpr_lr,  label=f'Best PCA ({best_pair}) (AUC={auc_lr:.3f})', lw=2)
+plt.plot([0, 1], [0, 1], 'k--', lw=1)
+plt.xlabel("False Positive Rate", fontsize=16)
+plt.ylabel("True Positive Rate",  fontsize=16)
+plt.title(f"ROC — best PCA pair by VAL {SORT_BY}", fontsize=13)
+plt.legend(fontsize=10, loc="lower right")
+plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+
+for name, (y_true, y_pred) in {
+    f"RF (Th={best_th_rf:.2f})"                               : (y_test, y_pred_rf),
+    f"XGB (Th={best_th_xgb:.2f})"                             : (y_test, y_pred_xgb),
+    f"Best PCA ({best_pair}, Th={best_pca['Threshold']:.2f})": (y_test, y_pred_lr_best),
+}.items():
+    cm   = confusion_matrix(y_true, y_pred)
+    disp = ConfusionMatrixDisplay(cm, display_labels=["Quiet", "Loud"])
+    disp.plot(cmap="Blues", values_format="d")
+    plt.title(f"Confusion Matrix: {name}", fontsize=16, fontweight='bold')
+    plt.xlabel("Predicted Label", fontsize=16)
+    plt.ylabel("True Label",      fontsize=16)
+    plt.xticks(fontsize=14, fontweight='bold')
+    plt.yticks(fontsize=14, fontweight='bold')
+    plt.tight_layout(); plt.show()
+
+plt.figure(figsize=(10, 8))
+for row in results:
+    fpr_c, tpr_c, auc_c = roc_cache[row["PC Pair"]]
+    plt.plot(fpr_c, tpr_c, lw=1, alpha=0.6,
+             label=f"{row['PC Pair']} (AUC={auc_c:.2f})")
+plt.plot([0, 1], [0, 1], 'k--', lw=1)
+plt.xlabel("False Positive Rate", fontsize=16)
+plt.ylabel("True Positive Rate",  fontsize=16)
+plt.title("All PCA pair ROC curves", fontsize=13)
+plt.legend(fontsize=10, loc="lower right", ncol=2)
+plt.grid(alpha=0.3); plt.tight_layout(); plt.show()
+
+
+###### top 3 pair visualisation
+
+
+top3 = summary_sorted.head(3)
+fig, axes = plt.subplots(3, 4, figsize=(22, 16))
+axes = axes.reshape(3, 4)
+
+# Flags fixed at 0 (scaled median = 0) for boundary visualisation
+flags_ref_train = np.zeros((1, len(flag_cols_pca)))
+
+for row_idx, (pair_name, row) in enumerate(top3.iterrows()):
+    nv   = re.findall(r'\d+', pair_name)
+    iv, jv = int(nv[0])-1, int(nv[1])-1
+    X_tr = X_train_pca[:, [iv, jv]]
+    X_te = X_test_pca[:,  [iv, jv]]
+    lr_v, poly_v = row["_lr_model"], row["_poly"]
+    all_pts = np.vstack([X_tr, X_te])
+    x_low, x_high, y_low, y_high = auto_axis_limits(all_pts)
+    xx, yy = np.meshgrid(np.linspace(x_low, x_high, 300),
+                         np.linspace(y_low, y_high, 300))
+    grid_poly  = poly_v.transform(np.c_[xx.ravel(), yy.ravel()])
+    n_grid     = grid_poly.shape[0]
+    flags_grid = np.tile(flags_ref_train, (n_grid, 1))
+    grid_lr    = np.hstack([grid_poly, flags_grid])
+    probs = lr_v.predict_proba(grid_lr)[:, 1].reshape(xx.shape)
+
+    ml = (y_train == 1).values;  mq = (y_train == 0).values
+    tl = (y_test  == 1).values;  tq = (y_test  == 0).values
+
+    for col_idx, (pts_q, pts_l, title, use_test) in enumerate([
+        (X_tr[mq], X_tr[ml], f"{pair_name} | RL+RQ (train)", False),
+        (None,     X_tr[ml], "Radio-Loud only (train)",       False),
+        (X_tr[mq], None,     "Radio-Quiet only (train)",      False),
+        (X_te[tq], X_te[tl],
+         f"Decision boundary (test)\n"
+         f"Correct RL={int(row['Correct Loud'])} "
+         f"Th={row['Threshold']:.2f} AUC={row['AUC']:.3f}", True),
+    ]):
+        ax = axes[row_idx, col_idx]
+
+        if pts_q is not None:
+            ax.scatter(pts_q[:, 0], pts_q[:, 1], c='blue', alpha=0.4, s=10,
+                       label='Radio-Quiet' + (' (test)' if use_test else ''))
+
+        if pts_l is not None:
+            ax.scatter(pts_l[:, 0], pts_l[:, 1], c='red',  alpha=0.4, s=10,
+                       label='Radio-Loud'  + (' (test)' if use_test else ''))
+
+        if use_test:
+            ax.contour(xx, yy, probs, levels=[row['Threshold']],
+                       colors='black', linestyles='--', linewidths=1.5)
+
+        ax.set_title(title, fontsize=12)
+        ax.set_xlabel(f"PC{iv+1}", fontsize=13)
+        ax.set_ylabel(f"PC{jv+1}", fontsize=13)
+        ax.set_xlim(x_low, x_high)
+        ax.set_ylim(y_low,  y_high)
+
+        if pts_q is not None or use_test:
+            ax.legend(fontsize=9, markerscale=2)
+
+plt.suptitle(
+    f"Top-3 pairs by {SORT_BY} | RQ = confirmed quiet (upper-limit R_i <= 30) "
+    f"+ sweep-promoted (>= {min_votes_needed}/{n_sweep} votes) "
+    f"| {n_amb:,} ambiguous excluded | {n_out_footprint:,} out-of-footprint excluded",
+    fontsize=13, y=1.01)
+plt.tight_layout(); plt.show()
+
+
+################# KDE FOR TOP 2 PAIRS
+
+print("\n===== Section 14: KDE plots (WE HAVE LOST TRACK OF SECTIONS NAMES BY NOW) =====")
+top2_kde = summary_sorted.head(2)
+
+for pair_name, row in top2_kde.iterrows():
+    nv   = re.findall(r'\d+', pair_name)
+    iv, jv = int(nv[0])-1, int(nv[1])-1
+    pcx, pcy = f"PC{iv+1}", f"PC{jv+1}"
+    X_all    = np.vstack([X_train_pca, X_val_pca])
+    y_all    = np.concatenate([y_train.values, y_val.values])
+    pts_rl   = X_all[y_all == 1][:, [iv, jv]]
+    pts_rq   = X_all[y_all == 0][:, [iv, jv]]
+    x_low, x_high, y_low, y_high = auto_axis_limits(
+        np.vstack([pts_rl, pts_rq]), percentile_lo=1, percentile_hi=99, padding=0.15)
+    grid_n = 300
+    xg = np.linspace(x_low, x_high, grid_n)
+    yg = np.linspace(y_low,  y_high, grid_n)
+    xx, yy   = np.meshgrid(xg, yg)
+    grid_pts = np.vstack([xx.ravel(), yy.ravel()])
+    kde_rl   = gaussian_kde(pts_rl.T)
+    kde_rq   = gaussian_kde(pts_rq.T)
+    print(f"  {pair_name} KDE bandwidth (Scott's rule):")
+    print(f"    RL: bw_method={kde_rl.factor:.4f}")
+    print(f"    RQ: bw_method={kde_rq.factor:.4f}")
+    z_rl      = kde_rl(grid_pts).reshape(xx.shape)
+    z_rq      = kde_rq(grid_pts).reshape(xx.shape)
+    z_rl_norm = z_rl / z_rl.max()
+    z_rq_norm = z_rq / z_rq.max()
+    z_diff    = z_rl_norm - z_rq_norm
+
+    fig, axes_kde = plt.subplots(1, 4, figsize=(24, 6))
+    fig.suptitle(f"KDE — {pair_name} | RL={pts_rl.shape[0]:,} RQ={pts_rq.shape[0]:,} "
+                 f"(Scott's bandwidth rule)", fontsize=14)
+
+    ax = axes_kde[0]
+    cf = ax.contourf(xx, yy, z_rl_norm, levels=20, cmap='Reds', alpha=0.85)
+    ax.contour(xx, yy, z_rl_norm, levels=10, colors='darkred', linewidths=0.5, alpha=0.6)
+    plt.colorbar(cf, ax=ax, label='Normalised density')
+    ax.set_title("Radio-Loud KDE", fontsize=13)
+    ax.set_xlabel(pcx, fontsize=12); ax.set_ylabel(pcy, fontsize=12)
+    ax.set_xlim(x_low, x_high); ax.set_ylim(y_low, y_high)
+
+    ax = axes_kde[1]
+    cf = ax.contourf(xx, yy, z_rq_norm, levels=20, cmap='Blues', alpha=0.85)
+    ax.contour(xx, yy, z_rq_norm, levels=10, colors='navy', linewidths=0.5, alpha=0.6)
+    plt.colorbar(cf, ax=ax, label='Normalised density')
+    ax.set_title("Radio-Quiet KDE", fontsize=13)
+    ax.set_xlabel(pcx, fontsize=12); ax.set_ylabel(pcy, fontsize=12)
+    ax.set_xlim(x_low, x_high); ax.set_ylim(y_low, y_high)
+
+    ax   = axes_kde[2]
+    vmax = np.abs(z_diff).max()
+    cf   = ax.contourf(xx, yy, z_diff, levels=20, cmap='RdBu_r',
+                       vmin=-vmax, vmax=vmax, alpha=0.85)
+    ax.contour(xx, yy, z_diff, levels=[0], colors='black', linewidths=1.5, linestyles='--')
+    plt.colorbar(cf, ax=ax, label='RL − RQ (normalised)')
+    ax.set_title("RL − RQ density difference\n(dashed = equal density)", fontsize=12)
+    ax.set_xlabel(pcx, fontsize=12); ax.set_ylabel(pcy, fontsize=12)
+    ax.set_xlim(x_low, x_high); ax.set_ylim(y_low, y_high)
+
+    ax = axes_kde[3]
+    np.random.seed(RANDOM_SEED)
+    idx_rl_s = np.random.choice(len(pts_rl), min(3000, len(pts_rl)), replace=False)
+    idx_rq_s = np.random.choice(len(pts_rq), min(3000, len(pts_rq)), replace=False)
+    ax.scatter(pts_rq[idx_rq_s, 0], pts_rq[idx_rq_s, 1],
+               c='steelblue', alpha=0.3, s=8, label='Radio-Quiet')
+    ax.scatter(pts_rl[idx_rl_s, 0], pts_rl[idx_rl_s, 1],
+               c='crimson',   alpha=0.3, s=8, label='Radio-Loud')
+    ax.contour(xx, yy, z_rl_norm, levels=[0.1, 0.3, 0.6, 0.9],
+               colors='darkred', linewidths=1.0, alpha=0.8)
+    ax.contour(xx, yy, z_rq_norm, levels=[0.1, 0.3, 0.6, 0.9],
+               colors='navy',    linewidths=1.0, alpha=0.8, linestyles='--')
+    ax.set_title("Scatter + KDE contours\n(solid=RL, dashed=RQ)", fontsize=12)
+    ax.set_xlabel(pcx, fontsize=12); ax.set_ylabel(pcy, fontsize=12)
+    ax.set_xlim(x_low, x_high); ax.set_ylim(y_low, y_high)
+    ax.legend(fontsize=9, markerscale=2)
+
+    plt.tight_layout(); plt.show()
+
+########## LINEAR AND QUADRATIC MCMC
+
+print("\n===== Section 15: MCMC ( WE CONTINUE SECTIONS NAMES FROM LAST)=====")
+top2_mcmc = summary_sorted.head(2)
+
+for pair_name, row in top2_mcmc.iterrows():
+    nv    = re.findall(r'\d+', pair_name)
+    iv, jv = int(nv[0])-1, int(nv[1])-1
+    pcx, pcy = f"PC{iv+1}", f"PC{jv+1}"
+    X2_train    = X_train_pca[:, [iv, jv]]
+    y_train_arr = y_train.values.astype(float)
+    x_low, x_high, y_low, y_high = auto_axis_limits(X2_train)
+
+    print(f"\n{'='*60}")
+    print(f"MCMC for pair: {pair_name} ({pcx} vs {pcy})")
+    print(f"{'='*60}")
+
+    print("\n Linear model")
+    chain_lin, sampler_lin = run_mcmc(
+        log_posterior_linear_weighted, n_params=3,
+        X2_train=X2_train, y_train_arr=y_train_arr,
+        n_walkers=MCMC_WALKERS, n_burn=MCMC_BURN_IN,
+        n_prod=MCMC_PRODUCTION, thin=MCMC_THIN,
+        label=f"{pair_name} Linear")
+
+    print("\n Quadratic model")
+    chain_quad, sampler_quad = run_mcmc(
+        log_posterior_quadratic_weighted, n_params=6,
+        X2_train=X2_train, y_train_arr=y_train_arr,
+        n_walkers=MCMC_WALKERS, n_burn=MCMC_BURN_IN,
+        n_prod=MCMC_PRODUCTION, thin=MCMC_THIN,
+        label=f"{pair_name} Quadratic")
+
+    lin_labels  = ['intercept', f'β_{pcx}', f'β_{pcy}']
+    quad_labels = ['intercept', f'β_{pcx}', f'β_{pcy}',
+                   f'β_{pcx}²', f'β_{pcx}{pcy}', f'β_{pcy}²']
+
+    print(f"\n Posterior summary — Linear ({pair_name}):")
+    for k, lbl in enumerate(lin_labels):
+        med = np.median(chain_lin[:,k])
+        lo  = np.percentile(chain_lin[:,k], 16)
+        hi  = np.percentile(chain_lin[:,k], 84)
+        print(f"   {lbl:20s} median={med:+.4f} 68%CI=[{lo:+.4f}, {hi:+.4f}]")
+
+    print(f"\n Posterior summary — Quadratic ({pair_name}):")
+    for k, lbl in enumerate(quad_labels):
+        med = np.median(chain_quad[:,k])
+        lo  = np.percentile(chain_quad[:,k], 16)
+        hi  = np.percentile(chain_quad[:,k], 84)
+        print(f"   {lbl:20s} median={med:+.4f} 68%CI=[{lo:+.4f}, {hi:+.4f}]")
+
+    xx_m, yy_m = np.meshgrid(np.linspace(x_low, x_high, 200),
+                              np.linspace(y_low, y_high, 200))
+    rng_sub  = np.random.default_rng(RANDOM_SEED)
+    idx_sub  = rng_sub.choice(len(chain_lin),  size=min(500,len(chain_lin)),  replace=False)
+    idx_subq = rng_sub.choice(len(chain_quad), size=min(500,len(chain_quad)), replace=False)
+    pm_lin,  pl_lin,  ph_lin  = mcmc_decision_boundary(chain_lin[idx_sub],   xx_m, yy_m, model='linear')
+    pm_quad, pl_quad, ph_quad = mcmc_decision_boundary(chain_quad[idx_subq], xx_m, yy_m, model='quadratic')
+
+    ml = (y_train_arr == 1); mq = (y_train_arr == 0)
+    fig, axes_mcmc = plt.subplots(1, 2, figsize=(18, 7))
+    fig.suptitle(f"MCMC Decision Boundaries — {pair_name} "
+                 f"(median + 68% credible band)", fontsize=14)
+    for ax_m, pm, pl, ph, title_m in [
+        (axes_mcmc[0], pm_lin,  pl_lin,  ph_lin,  "Linear"),
+        (axes_mcmc[1], pm_quad, pl_quad, ph_quad, "Quadratic"),
+    ]:
+        np.random.seed(RANDOM_SEED)
+        idx_rl_s = np.random.choice(np.where(ml)[0], min(2000,ml.sum()), replace=False)
+        idx_rq_s = np.random.choice(np.where(mq)[0], min(2000,mq.sum()), replace=False)
+        ax_m.scatter(X2_train[idx_rq_s,0], X2_train[idx_rq_s,1],
+                     c='steelblue', alpha=0.25, s=8, label='Radio-Quiet (train)')
+        ax_m.scatter(X2_train[idx_rl_s,0], X2_train[idx_rl_s,1],
+                     c='crimson',   alpha=0.25, s=8, label='Radio-Loud (train)')
+        ax_m.contourf(xx_m, yy_m, pm, levels=[0.5,1.0], colors='black', alpha=0.08)
+        ax_m.contourf(xx_m, yy_m, pl, levels=[0.5,1.0], colors='grey',  alpha=0.06)
+        ax_m.contourf(xx_m, yy_m, ph, levels=[0.5,1.0], colors='grey',  alpha=0.06)
+        ax_m.contour(xx_m, yy_m, pm, levels=[0.5], colors='black',
+                     linewidths=2.0, linestyles='-',  label='Median boundary (p=0.5)')
+        ax_m.contour(xx_m, yy_m, pl, levels=[0.5], colors='dimgray',
+                     linewidths=1.2, linestyles='--', label='16th/84th percentile')
+        ax_m.contour(xx_m, yy_m, ph, levels=[0.5], colors='dimgray',
+                     linewidths=1.2, linestyles='--')
+        ax_m.set_title(f"{title_m} model", fontsize=13)
+        ax_m.set_xlabel(pcx, fontsize=12); ax_m.set_ylabel(pcy, fontsize=12)
+        ax_m.set_xlim(x_low, x_high);     ax_m.set_ylim(y_low, y_high)
+        ax_m.legend(fontsize=9, markerscale=2)
+    plt.tight_layout(); plt.show()
+
+    # WE ALSO DO TRACE PLOTS TO CHECK CONVERGENCE
+
+    full_chain_lin  = sampler_lin.get_chain()
+    full_chain_quad = sampler_quad.get_chain()
+    fig, axes_tr = plt.subplots(len(lin_labels), 1,
+                                figsize=(12, 2.5*len(lin_labels)), sharex=True)
+    fig.suptitle(f"MCMC Trace — Linear model — {pair_name}", fontsize=13)
+    for k, (ax_t, lbl) in enumerate(zip(axes_tr, lin_labels)):
+        ax_t.plot(full_chain_lin[:,:,k], alpha=0.3, lw=0.5)
+        ax_t.set_ylabel(lbl, fontsize=10)
+    axes_tr[-1].set_xlabel("Step", fontsize=10)
+    plt.tight_layout(); plt.show()
+
+    fig, axes_tr = plt.subplots(len(quad_labels), 1,
+                                figsize=(12, 2.2*len(quad_labels)), sharex=True)
+    fig.suptitle(f"MCMC Trace — Quadratic model — {pair_name}", fontsize=13)
+    for k, (ax_t, lbl) in enumerate(zip(axes_tr, quad_labels)):
+        ax_t.plot(full_chain_quad[:,:,k], alpha=0.3, lw=0.5)
+        ax_t.set_ylabel(lbl, fontsize=10)
+    axes_tr[-1].set_xlabel("Step", fontsize=10)
+    plt.tight_layout(); plt.show()
+
+    # CORNER PLOTS
+
+    fig_c = corner.corner(chain_lin, labels=lin_labels,
+                          quantiles=[0.16,0.5,0.84], show_titles=True,
+                          title_kwargs={"fontsize":10}, title_fmt=".3f",
+                          smooth=1.0, plot_datapoints=False,
+                          fill_contours=True, color='steelblue')
+    fig_c.suptitle(f"Corner — Linear model — {pair_name}", fontsize=13, y=1.02)
+    plt.show()
+
+    fig_c = corner.corner(chain_quad, labels=quad_labels,
+                          quantiles=[0.16,0.5,0.84], show_titles=True,
+                          title_kwargs={"fontsize":10}, title_fmt=".3f",
+                          smooth=1.0, plot_datapoints=False,
+                          fill_contours=True, color='tomato')
+    fig_c.suptitle(f"Corner — Quadratic model — {pair_name}", fontsize=13, y=1.02)
+    plt.show()
+
+
+########## RLQSR ROUTINE
+
+
+print("\nSection 16: RLQSR — RLQ Separation Rating ")
+print(f"  LR degree used in Sec 11   : {LR_DEGREE}")
+print(f"  Fisher weight              : {RLQSR_FISHER_WEIGHT}")
+print(f"  Span   weight              : {RLQSR_SPAN_WEIGHT}")
+print(f"  NOTE: Fisher + Span metrics computed on TRAINING set only "
+      f"(no information leakage).")
+print(f"  LR metrics (Recall/F1/AUC) are joined from Sec-11 TEST-set results "
+      f"for display only.")
+
+rlqsr_rows = []
+
+for (i, j) in pairs:          # 'pairs' already defined in Sec 11
+    pair_name = f"PC{i+1}-PC{j+1}"
+
+   
+    RL_tr = X_train_pca[y_train.values == 1][:, [i, j]]
+    RQ_tr = X_train_pca[y_train.values == 0][:, [i, j]]
+
+    if len(RL_tr) < 3 or len(RQ_tr) < 3:
+        # Degenerate pair — skip
+        continue
+
+    # fishre ratio
+
+    mu_RL  = RL_tr.mean(axis=0)
+    mu_RQ  = RQ_tr.mean(axis=0)
+    delta_mu = np.linalg.norm(mu_RL - mu_RQ)
+    sigma2   = 0.5 * (RL_tr.var(axis=0).sum() + RQ_tr.var(axis=0).sum())
+    fisher   = (delta_mu ** 2) / (sigma2 + 1e-12)
+
+    # convex hull ratio
+    try:
+        area_rl  = ConvexHull(RL_tr).volume          
+        area_all = ConvexHull(np.vstack([RL_tr, RQ_tr])).volume
+        span     = area_rl / area_all if area_all > 0 else np.nan
+    except Exception:
+        span = np.nan
+
+    # ─rlqsr score
+
+    span_term = (1.0 - span) if not np.isnan(span) else 0.0    ########## if you remeber these weights can be adjusted in user controlled section
+    rlqsr_score = (RLQSR_FISHER_WEIGHT * fisher
+                   + RLQSR_SPAN_WEIGHT  * span_term)
+
+    rlqsr_rows.append({
+        "PC Pair"      : pair_name,
+        "Fisher Ratio" : fisher,
+        "Span Ratio"   : span,
+        "RLQSR Score"  : rlqsr_score,
+    })
+
+rlqsr_df = pd.DataFrame(rlqsr_rows).set_index("PC Pair")
+
+
+lr_display_cols = ["Recall", "F1", "AUC", "Threshold"]
+rlqsr_full_df   = rlqsr_df.join(
+    summary_df[lr_display_cols], how="left"
+).sort_values("RLQSR Score", ascending=False)
+
+print(f"\n===== RLQSR FULL TABLE (sorted by RLQSR Score, degree={LR_DEGREE}) =====")
+print(rlqsr_full_df.round(4).to_string())
+
+print(f"\n===== TOP-15 PC PAIRS BY RLQSR SCORE =====")
+print(rlqsr_full_df.head(15)[
+    ["Fisher Ratio", "Span Ratio", "RLQSR Score", "Recall", "F1", "AUC"]
+].round(4).to_string())
+
+# Best RLQSR pair
+best_rlqsr_pair = rlqsr_full_df.index[0]
+best_rlqsr_row  = rlqsr_full_df.iloc[0]
+print(f"\n===== BEST PAIR BY RLQSR SCORE: {best_rlqsr_pair} =====")
+print(f"  Fisher Ratio : {best_rlqsr_row['Fisher Ratio']:.4f}")
+print(f"  Span Ratio   : {best_rlqsr_row['Span Ratio']:.4f}")
+print(f"  RLQSR Score  : {best_rlqsr_row['RLQSR Score']:.4f}")
+print(f"  (Test) Recall: {best_rlqsr_row['Recall']:.4f}")
+print(f"  (Test) F1    : {best_rlqsr_row['F1']:.4f}")
+print(f"  (Test) AUC   : {best_rlqsr_row['AUC']:.4f}")
+
+######### rlqsr bar chart for top 15 pairs
+
+top15_rlqsr = rlqsr_full_df.head(15).copy()
+n_top        = len(top15_rlqsr)
+x_pos        = np.arange(n_top)
+
+fig_rlqsr, axes_rlqsr = plt.subplots(1, 3, figsize=(20, 6))
+fig_rlqsr.suptitle(
+    f"RLQSR — Top-{n_top} PC pairs  |  LR degree={LR_DEGREE}  |  "
+    f"Fisher weight={RLQSR_FISHER_WEIGHT}, Span weight={RLQSR_SPAN_WEIGHT}\n"
+    f"(Fisher & Span computed on training set only — no leakage)",
+    fontsize=12, y=1.01
+)
+
+
+ax = axes_rlqsr[0]
+bars_score = ax.bar(x_pos, top15_rlqsr["RLQSR Score"].values,
+                    color='mediumpurple', edgecolor='white', linewidth=0.7, alpha=0.88)
+for bar, val in zip(bars_score, top15_rlqsr["RLQSR Score"].values):
+    ax.text(bar.get_x() + bar.get_width()/2.0, bar.get_height() + 0.002,
+            f'{val:.3f}', ha='center', va='bottom', fontsize=7.5, fontweight='bold',
+            color='mediumpurple')
+ax.set_xticks(x_pos)
+ax.set_xticklabels(top15_rlqsr.index, rotation=45, ha='right', fontsize=8)
+ax.set_ylabel("RLQSR Score", fontsize=11)
+ax.set_title("RLQSR Composite Score", fontsize=11)
+ax.grid(axis='y', alpha=0.3)
+
+
+ax = axes_rlqsr[1]
+bars_fisher = ax.bar(x_pos, top15_rlqsr["Fisher Ratio"].values,
+                     color='steelblue', edgecolor='white', linewidth=0.7, alpha=0.88)
+for bar, val in zip(bars_fisher, top15_rlqsr["Fisher Ratio"].values):
+    ax.text(bar.get_x() + bar.get_width()/2.0, bar.get_height() + 0.001,
+            f'{val:.3f}', ha='center', va='bottom', fontsize=7.5, fontweight='bold',
+            color='steelblue')
+ax.set_xticks(x_pos)
+ax.set_xticklabels(top15_rlqsr.index, rotation=45, ha='right', fontsize=8)
+ax.set_ylabel("Fisher Ratio", fontsize=11)
+ax.set_title("Fisher Ratio\n(mean-separation / within-class variance)", fontsize=11)
+ax.grid(axis='y', alpha=0.3)
+
+
+ax = axes_rlqsr[2]
+span_vals = top15_rlqsr["Span Ratio"].fillna(np.nan).values
+bars_span = ax.bar(x_pos, span_vals,
+                   color='tomato', edgecolor='white', linewidth=0.7, alpha=0.88)
+for bar, val in zip(bars_span, span_vals):
+    if not np.isnan(val):
+        ax.text(bar.get_x() + bar.get_width()/2.0, bar.get_height() + 0.001,
+                f'{val:.3f}', ha='center', va='bottom', fontsize=7.5, fontweight='bold',
+                color='tomato')
+ax.set_xticks(x_pos)
+ax.set_xticklabels(top15_rlqsr.index, rotation=45, ha='right', fontsize=8)
+ax.set_ylabel("Span Ratio (lower = more concentrated RL)", fontsize=10)
+ax.set_title("Span Ratio\n(RL hull area / total hull area)", fontsize=11)
+ax.grid(axis='y', alpha=0.3)
+
+plt.tight_layout(); plt.show()
+
+####### rlqsr recall/auc scatter 
+
+fig_sc, axes_sc = plt.subplots(1, 2, figsize=(14, 6))
+fig_sc.suptitle(
+    f"RLQSR Score vs Test-Set LR Metrics  (degree={LR_DEGREE})\n"
+    f"Colour = AUC | Size = Fisher Ratio (normalised)  — all {len(rlqsr_full_df)} PC pairs",
+    fontsize=12
+)
+
+norm_fisher = (rlqsr_full_df["Fisher Ratio"].values
+               / (rlqsr_full_df["Fisher Ratio"].max() + 1e-12))
+marker_sizes = 30 + 150 * norm_fisher
+
+
+ax = axes_sc[0]
+sc = ax.scatter(rlqsr_full_df["RLQSR Score"].values,
+                rlqsr_full_df["Recall"].values,
+                c=rlqsr_full_df["AUC"].values,
+                s=marker_sizes,
+                cmap='viridis', alpha=0.75, edgecolors='white', linewidths=0.5)
+plt.colorbar(sc, ax=ax, label='AUC')
+
+ax.annotate(best_rlqsr_pair,
+            xy=(best_rlqsr_row["RLQSR Score"], best_rlqsr_row["Recall"]),
+            xytext=(10, 5), textcoords='offset points',
+            fontsize=9, color='crimson', fontweight='bold',
+            arrowprops=dict(arrowstyle='->', color='crimson', lw=1.2))
+
+ax.annotate(f"{best_pair_name}\n(best ML)",
+            xy=(rlqsr_full_df.loc[best_pair_name, "RLQSR Score"],
+                rlqsr_full_df.loc[best_pair_name, "Recall"]),
+            xytext=(10, -15), textcoords='offset points',
+            fontsize=9, color='navy', fontweight='bold',
+            arrowprops=dict(arrowstyle='->', color='navy', lw=1.2))
+ax.set_xlabel("RLQSR Score (train-only)", fontsize=11)
+ax.set_ylabel(f"Recall (test set, degree={LR_DEGREE})", fontsize=11)
+ax.set_title("RLQSR Score vs Recall", fontsize=11)
+ax.grid(alpha=0.3)
+
+# Scatter: rlqsr vs auc
+
+ax = axes_sc[1]
+sc2 = ax.scatter(rlqsr_full_df["RLQSR Score"].values,
+                 rlqsr_full_df["AUC"].values,
+                 c=rlqsr_full_df["Recall"].values,
+                 s=marker_sizes,
+                 cmap='plasma', alpha=0.75, edgecolors='white', linewidths=0.5)
+plt.colorbar(sc2, ax=ax, label='Recall')
+ax.annotate(best_rlqsr_pair,
+            xy=(best_rlqsr_row["RLQSR Score"], best_rlqsr_row["AUC"]),
+            xytext=(10, 5), textcoords='offset points',
+            fontsize=9, color='crimson', fontweight='bold',
+            arrowprops=dict(arrowstyle='->', color='crimson', lw=1.2))
+ax.annotate(f"{best_pair_name}\n(best ML)",
+            xy=(rlqsr_full_df.loc[best_pair_name, "RLQSR Score"],
+                rlqsr_full_df.loc[best_pair_name, "AUC"]),
+            xytext=(10, -15), textcoords='offset points',
+            fontsize=9, color='navy', fontweight='bold',
+            arrowprops=dict(arrowstyle='->', color='navy', lw=1.2))
+ax.set_xlabel("RLQSR Score (train-only)", fontsize=11)
+ax.set_ylabel(f"AUC (test set, degree={LR_DEGREE})", fontsize=11)
+ax.set_title("RLQSR Score vs AUC", fontsize=11)
+ax.grid(alpha=0.3)
+
+plt.tight_layout(); plt.show()
+
+###### we also try to visualize convex hull
+
+top3_rlqsr = rlqsr_full_df.head(3)
+
+fig_hull, axes_hull = plt.subplots(1, 3, figsize=(21, 7))
+fig_hull.suptitle(
+    f"Convex Hull Separation — Top-3 RLQSR Pairs  (training set, degree={LR_DEGREE})\n"
+    f"Red hull = RL, Blue hull = RQ, Black hull = combined",
+    fontsize=12, y=1.01
+)
+
+for col_idx, (pair_name, hull_row) in enumerate(top3_rlqsr.iterrows()):
+    nv     = re.findall(r'\d+', pair_name)
+    iv, jv = int(nv[0])-1, int(nv[1])-1
+    pcx, pcy = f"PC{iv+1}", f"PC{jv+1}"
+
+    RL_h = X_train_pca[y_train.values == 1][:, [iv, jv]]
+    RQ_h = X_train_pca[y_train.values == 0][:, [iv, jv]]
+    ALL_h = np.vstack([RL_h, RQ_h])
+
+    ax = axes_hull[col_idx]
+
+
+    np.random.seed(RANDOM_SEED)
+    idx_rl_h = np.random.choice(len(RL_h), min(2000, len(RL_h)), replace=False)
+    idx_rq_h = np.random.choice(len(RQ_h), min(2000, len(RQ_h)), replace=False)
+    ax.scatter(RQ_h[idx_rq_h, 0], RQ_h[idx_rq_h, 1],
+               c='steelblue', alpha=0.20, s=6, label='RQ (train)')
+    ax.scatter(RL_h[idx_rl_h, 0], RL_h[idx_rl_h, 1],
+               c='crimson',   alpha=0.25, s=6, label='RL (train)')
+
+
+    for pts_h, colour, lbl_h in [
+        (RL_h,  'crimson',   f'RL hull (area={hull_row["Span Ratio"]*ConvexHull(ALL_h).volume:.2f})'),
+        (RQ_h,  'steelblue', 'RQ hull'),
+        (ALL_h, 'black',     f'Combined hull (area={ConvexHull(ALL_h).volume:.2f})'),
+    ]:
+        try:
+            hull_obj = ConvexHull(pts_h)
+            for simplex in hull_obj.simplices:
+                ax.plot(pts_h[simplex, 0], pts_h[simplex, 1],
+                        color=colour, lw=1.5 if colour != 'black' else 1.0,
+                        alpha=0.85 if colour != 'black' else 0.50,
+                        linestyle='-' if colour != 'black' else '--')
+        except Exception:
+            pass
+
+    ax.set_title(
+        f"{pair_name}\nRLQSR={hull_row['RLQSR Score']:.3f}  "
+        f"Fisher={hull_row['Fisher Ratio']:.3f}  Span={hull_row['Span Ratio']:.3f}",
+        fontsize=11
+    )
+    ax.set_xlabel(pcx, fontsize=11)
+    ax.set_ylabel(pcy, fontsize=11)
+    ax.legend(fontsize=8, markerscale=2)
+    ax.grid(alpha=0.25)
+
+plt.tight_layout(); plt.show()
+
+###### fisher ratio heatmap
+
+n_pc      = X_train_pca.shape[1]
+fisher_mat = np.full((n_pc, n_pc), np.nan)
+span_mat   = np.full((n_pc, n_pc), np.nan)
+rlqsr_mat  = np.full((n_pc, n_pc), np.nan)
+
+for pair_name, r in rlqsr_df.iterrows():
+    nv = re.findall(r'\d+', pair_name)
+    ii, jj = int(nv[0])-1, int(nv[1])-1
+    fisher_mat[ii, jj] = r["Fisher Ratio"]
+    fisher_mat[jj, ii] = r["Fisher Ratio"]
+    span_mat[ii, jj]   = r["Span Ratio"]
+    span_mat[jj, ii]   = r["Span Ratio"]
+    rlqsr_mat[ii, jj]  = r["RLQSR Score"]
+    rlqsr_mat[jj, ii]  = r["RLQSR Score"]
+
+pc_tick_labels = [f'PC{k+1}' for k in range(n_pc)]
+
+fig_hmat, axes_hmat = plt.subplots(1, 3, figsize=(21, 6))
+fig_hmat.suptitle(
+    f"RLQSR Component Heatmaps — all PC pair combinations  "
+    f"(training set, degree={LR_DEGREE})",
+    fontsize=12
+)
+
+for ax_h, mat, cmap_h, title_h in [
+    (axes_hmat[0], fisher_mat, 'YlOrRd',  'Fisher Ratio'),
+    (axes_hmat[1], span_mat,   'YlGnBu_r','Span Ratio\n(lower = RL more concentrated)'),
+    (axes_hmat[2], rlqsr_mat,  'PuRd',    'RLQSR Composite Score'),
+]:
+    vmin_h = np.nanmin(mat)
+    vmax_h = np.nanmax(mat)
+    im_h   = ax_h.imshow(mat, cmap=cmap_h, aspect='auto',
+                          vmin=vmin_h, vmax=vmax_h, interpolation='none')
+    plt.colorbar(im_h, ax=ax_h, fraction=0.046, pad=0.04)
+    ax_h.set_xticks(range(n_pc)); ax_h.set_yticks(range(n_pc))
+    ax_h.set_xticklabels(pc_tick_labels, fontsize=9)
+    ax_h.set_yticklabels(pc_tick_labels, fontsize=9)
+    for ri_h in range(n_pc):
+        for ci_h in range(n_pc):
+            val_h = mat[ri_h, ci_h]
+            if not np.isnan(val_h):
+                txt_col = 'white' if (val_h - vmin_h) > 0.6*(vmax_h - vmin_h) else 'black'
+                ax_h.text(ci_h, ri_h, f'{val_h:.2f}', ha='center', va='center',
+                          fontsize=7, color=txt_col, fontweight='bold')
+    ax_h.set_title(title_h, fontsize=11)
+    ax_h.set_xlabel('PC index', fontsize=10)
+    ax_h.set_ylabel('PC index', fontsize=10)
+
+plt.tight_layout(); plt.show()
+
+print("\nCHECK: RLQSR SECTION COMPLETE")
+print(f"  Best pair by RLQSR          : {best_rlqsr_pair}  "
+      f"(score={best_rlqsr_row['RLQSR Score']:.4f})")
+print(f"  Best pair by VAL {SORT_BY:<8}  : {best_pair_name}")
+print(f"  LR degree                   : {LR_DEGREE}")
+print(f"  Fisher weight / Span weight : {RLQSR_FISHER_WEIGHT} / {RLQSR_SPAN_WEIGHT}")
+
+print("\nWE ARE FINALLY DONE. THIS HAS BEEN A LONG WAY BUT YOU HAVE MADE IT. CONGRATS")
