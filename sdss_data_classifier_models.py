@@ -92,7 +92,7 @@ print(pca_components)
 X = data[features]
 y = data['Radio_Loud']
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
-clf = RandomForestClassifier(n_estimators=100, random_state=42) #train as many forests as required
+clf = RandomForestClassifier(n_estimators=100, random_state=42) #change these setting as per your will. We have as of now used some defaults and settings we wish
 clf.fit(X_train, y_train)
 y_pred = clf.predict(X_test)
 
