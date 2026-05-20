@@ -1,4 +1,4 @@
-################### sdss dr16 pca analysis v21 (LATEST VERSION) ##########################
+################### sdss dr16 pca analysis v21 (Use this latest version of the code) ##########################
 
 import pandas as pd
 import numpy as np
@@ -492,7 +492,7 @@ data['in_first_footprint'] = footprint_mask.astype(int)
 n_in_footprint  = footprint_mask.sum()
 n_out_footprint = (~footprint_mask).sum()
 
-print("\n===== FIRST GEOMETRIC FOOTPRINT CLASSIFICATION =====")
+print("\n FIRST GEOMETRIC FOOTPRINT CLASSIFICATION ")
 print(f"Quasars with valid psfmag_i : {len(data):,}")
 print(f"  Inside FIRST footprint    : {n_in_footprint:,} "
       f"({100.0*n_in_footprint/len(data):.1f}%)")
@@ -516,7 +516,7 @@ data_infp['first_detected'] = (data_infp['first_flux'] > 0).astype(int)
 det   = data_infp['first_detected'] == 1
 nodet = data_infp['first_detected'] == 0
 
-print("\n===== FIRST DETECTION STATS (in-footprint only) =====")
+print("\n FIRST DETECTION STATS (in-footprint only) ")
 print(f"In-footprint quasars           : {len(data_infp):,}")
 print(f"FIRST-detected   (flux > 0)    : {det.sum():,} "
       f"({100.0*det.sum()/len(data_infp):.1f}%)")
@@ -607,7 +607,7 @@ print(f"  K_radio range: {K_radio.min():.3f} – {K_radio.max():.3f} "
 
 data_infp['source_class'] = 'AMBIGUOUS'
 
-rl_mask      = det   & (data_infp['R_i']       >  30)
+rl_mask      = det   & (data_infp['R_i']       >  30)       ########## we have used the R value to be 30 for this study. The traditional value is 10 (refer kellerman et al.)
 rq_det_mask  = det   & (data_infp['R_i']       <= 30)
 rq_nodet_mask= nodet & (data_infp['R_i_upper'] <= 30)
 rq_mask      = rq_det_mask | rq_nodet_mask
@@ -621,7 +621,7 @@ data_infp.loc[rq_mask,  'source_class'] = 'RQ'
 n_sweep          = len(FLUX_SWEEP_VALUES_mJy)
 min_votes_needed = int(np.ceil(VOTE_FRACTION_THRESHOLD * n_sweep))
 
-print(f"\n===== CHECK:FLUX-SWEEP RQ PROMOTION (ambiguous sources only) =====")
+print(f"\n This is a check for ambigious sources:FLUX-SWEEP RQ PROMOTION (ambiguous sources only) ")
 print(f"Sweep flux limits        : {FLUX_SWEEP_VALUES_mJy} mJy")
 print(f"Number of sweep values   : {n_sweep}")
 print(f"Vote fraction threshold  : {VOTE_FRACTION_THRESHOLD:.4f} "
@@ -680,7 +680,7 @@ n_rq_sweep = n_promoted
 n_rq_total = rq_mask_final.sum()
 n_amb      = amb_mask_final.sum()
 
-print(f"\n===== IN-FOOTPRINT CATALOGUE — THREE-WAY CLASSIFICATION (AFTWER SWEEPING) =====")
+print(f"\n IN-FOOTPRINT CATALOGUE — THREE-WAY CLASSIFICATION (AFTWER SWEEPING)")
 print(f"Total (in FIRST footprint, valid psfmag_i)  : {len(data_infp):,}")
 print(f"  RADIO-LOUD (RL)  R_i > 30                 : "
       f"{n_rl:,} ({100*n_rl/len(data_infp):.2f}%)")
@@ -703,7 +703,7 @@ print(f"Flux sweep range           : {min(FLUX_SWEEP_VALUES_mJy):.2f} – "
 print(f"Vote fraction threshold    : {VOTE_FRACTION_THRESHOLD:.4f} "
       f"(>= {min_votes_needed}/{n_sweep} RQ votes needed to promote)")
 
-print("\n===== R_i upper-bound stats (non-detections, in-footprint, central limit) =====")
+print("\n. R_i upper-bound stats (non-detections, in-footprint, central limit) .")
 print(data_infp.loc[nodet, 'R_i_upper'].describe())
 print(f"R_i_upper <= 30 "
       f"-> confirmed RQ       : {(data_infp.loc[nodet,'R_i_upper'] <= 30).sum():,}")
@@ -712,7 +712,7 @@ print(f"R_i_upper > 30, sweep votes >= {min_votes_needed}/{n_sweep} "
 print(f"R_i_upper > 30, sweep votes <  {min_votes_needed}/{n_sweep} "
       f"-> AMBIGUOUS          : {n_amb:,}")
 
-print("\n===== FLUX-SWEEP VOTE DISTRIBUTION (ambiguous sources) =====")
+print("\n FLUX-SWEEP VOTE DISTRIBUTION (ambiguous sources) ")
 print(f"  {'RQ votes':>10} {'N sources':>12} {'% of amb pool':>15} "
       f"{'Promoted?':>12}")
 print(f"  {'-'*55}")
@@ -748,7 +748,7 @@ data_sub = data_sub.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=Tr
 n_rl_sub = (data_sub['Radio_Loud'] == 1).sum()
 n_rq_sub = (data_sub['Radio_Loud'] == 0).sum()
 
-print("\n===== SUBSAMPLE (in-footprint RL + RQ only) =====")
+print("\n subsample (in-footprint RL + RQ only)")
 print(f"RQ_FRACTION       : {RQ_FRACTION}")
 print(f"In-footprint RL   : {n_rl:,} | In-footprint RQ pool: {len(rq_pool):,}")
 print(f"Out-of-footprint  : {n_out_footprint:,} (excluded — no radio coverage)")
@@ -929,10 +929,10 @@ assert X_test.isnull().sum().sum()  == 0, "NaN remains in X_test after imputatio
 print("  Imputation complete — zero NaN in all splits. ✓")
 
 
-# ===========================================================================
+#
 # 8. SCALING + PCA
-# ===========================================================================
-# ---------------------------------------------------------------------------
+# 
+# 
 # WE HAVE KEPT THIS SECTION AS REFERNCE FOR HANDLING THE MISSINGNESS FLAGS:
 # PCA is fitted on MEASUREMENT FEATURES ONLY
 # Missingness information is still available to all three classifiers:
@@ -1049,7 +1049,7 @@ print(corr_stack.head(10).to_string(index=False))
 #### COMPONENT LOADING
 
 
-loadings   = pca.components_          # shape: (7, n_meas)
+loadings   = pca.components_         
 n_pcs      = pca.n_components_
 pc_labels_hm = [f'PC{k+1}\n({pca.explained_variance_ratio_[k]*100:.1f}%)'
                 for k in range(n_pcs)]
@@ -1087,12 +1087,12 @@ loadings_df = pd.DataFrame(loadings,
 print('\nPCA Loadings Table (measurement features):')
 print(loadings_df.round(3).to_string())
 print('\nDominant feature(s) per PC (|loading| > 0.35):')
-for k in range(n_pcs):
-    dominant = [(meas_cols[ci], loadings[k, ci])
-                for ci in range(n_meas) if abs(loadings[k, ci]) > 0.35]
-    dominant.sort(key=lambda x: abs(x[1]), reverse=True)
-    dominant_str = ', '.join(f'{f}({v:+.3f})' for f, v in dominant)
-    print(f'  PC{k+1}: {dominant_str if dominant_str else "none above threshold"}')
+#for k in range(n_pcs):
+ #   dominant = [(meas_cols[ci], loadings[k, ci])         ####### OPTIONAL IF YOU WISH TO CHECK WHICH COMPONENTS HAVE DOMINANT CONTRIBUTIONS AS PER THE DEFININTION
+ #               for ci in range(n_meas) if abs(loadings[k, ci]) > 0.35] ######### CHANGE THIS NUMBER IF YOU WISH
+ #   dominant.sort(key=lambda x: abs(x[1]), reverse=True)
+ #   dominant_str = ', '.join(f'{f}({v:+.3f})' for f, v in dominant)
+ #   print(f'  PC{k+1}: {dominant_str if dominant_str else "none above threshold"}')
 
 
 ### explained variance
@@ -1244,7 +1244,7 @@ for (i, j) in pairs:
     })
 
 summary_df      = pd.DataFrame(results).set_index("PC Pair")
-#summary_val_df  = pd.DataFrame(results_val).set_index("PC Pair")            ########## here we have separately used the val set for few checks. this does not do information leakage since we only report never seen test set
+#summary_val_df  = pd.DataFrame(results_val).set_index("PC Pair")            ########## here we have separately used the val set for few checks. this does not do information leakage since we only report never seen test set. This is just for few checks and is not directly relevant
 
 #summary_val_sorted = summary_val_df.sort_values(by=SORT_BY, ascending=False)
 #best_pair_name     = summary_val_sorted.index[0]
@@ -1254,13 +1254,13 @@ summary_sorted     = summary_df.sort_values(by=SORT_BY, ascending=False)
 
 display_cols = ["Accuracy", "Precision", "Recall", "F1", "AUC",
                 "Predicted Loud", "Correct Loud", "Total Loud", "Threshold"]
-#print(f"\n===== PCA + LR (degree={LR_DEGREE}) — Validation-set ranking =====")
+#print(f"\n PCA + LR (degree={LR_DEGREE}) — Validation-set ranking ")
 print(summary_val_sorted[["Accuracy", "Precision", "Recall", "F1", "AUC"]].round(4))
 
-print(f"\n===== PCA + LR (degree={LR_DEGREE}) — Test-set results =====")
+print(f"\n PCA + LR (degree={LR_DEGREE}) — Test-set results")
 print(summary_sorted[display_cols].round(4))
 
-#print(f"\n===== Best pair chosen by VAL {SORT_BY}: {best_pair_name} =====")
+#print(f"\n Best pair chosen by VAL {SORT_BY}: {best_pair_name} ")
 #print(f"  Validation {SORT_BY} : "
 #      f"{summary_val_df.loc[best_pair_name, SORT_BY]:.4f}")
 print(f"  Test-set metrics for this pair (reported once):")
@@ -1270,7 +1270,7 @@ for col in display_cols[:-1]:
 
 correct_rf  = ((y_test == 1) & (y_pred_rf  == 1)).sum()
 correct_xgb = ((y_test == 1) & (y_pred_xgb == 1)).sum()
-print(f"\n===== Correct RLQs on Test Set (total true RL = {y_test.sum():,}) =====")
+print(f"\n Correct RLQs on Test Set (total true RL = {y_test.sum():,}) ")
 print(f"RF  (Th={best_th_rf:.4f})  : {correct_rf:,}")
 print(f"XGB (Th={best_th_xgb:.4f}) : {correct_xgb:,}")
 print(f"Best PCA+LR ({best_pca.name}, Th={best_pca['Threshold']:.4f}): "
@@ -1406,7 +1406,7 @@ plt.tight_layout(); plt.show()
 
 ################# KDE FOR TOP 2 PAIRS
 
-print("\n===== Section 14: KDE plots (WE HAVE LOST TRACK OF SECTIONS NAMES BY NOW) =====")
+print("\n Section 14: KDE plots (WE HAVE LOST TRACK OF SECTIONS NAMES BY NOW) ")
 top2_kde = summary_sorted.head(2)
 
 for pair_name, row in top2_kde.iterrows():
@@ -1486,7 +1486,7 @@ for pair_name, row in top2_kde.iterrows():
 
 ########## LINEAR AND QUADRATIC MCMC
 
-print("\n===== Section 15: MCMC ( WE CONTINUE SECTIONS NAMES FROM LAST)=====")
+print("\n Section 15: MCMC ( WE CONTINUE SECTIONS NAMES FROM LAST)")
 top2_mcmc = summary_sorted.head(2)
 
 for pair_name, row in top2_mcmc.iterrows():
@@ -1621,14 +1621,14 @@ print("\nSection 16: RLQSR — RLQ Separation Rating ")
 print(f"  LR degree used in Sec 11   : {LR_DEGREE}")
 print(f"  Fisher weight              : {RLQSR_FISHER_WEIGHT}")
 print(f"  Span   weight              : {RLQSR_SPAN_WEIGHT}")
-print(f"  NOTE: Fisher + Span metrics computed on TRAINING set only "
+print(f"  NOTE: Fisher + Span metrics computed on TRAINING set only "      ###### this is just a confirmation check for you that we are not risking any info leakage
       f"(no information leakage).")
 print(f"  LR metrics (Recall/F1/AUC) are joined from Sec-11 TEST-set results "
-      f"for display only.")
+      f"for display only.")            ########### helful just to keep track of results since there are lot of variables defied
 
 rlqsr_rows = []
 
-for (i, j) in pairs:          # 'pairs' already defined in Sec 11
+for (i, j) in pairs:          # we pairs already defined in Sec 11 to keep consistency
     pair_name = f"PC{i+1}-PC{j+1}"
 
    
@@ -1676,10 +1676,10 @@ rlqsr_full_df   = rlqsr_df.join(
     summary_df[lr_display_cols], how="left"
 ).sort_values("RLQSR Score", ascending=False)
 
-print(f"\n===== RLQSR FULL TABLE (sorted by RLQSR Score, degree={LR_DEGREE}) =====")
+print(f"\n RLQSR FULL TABLE (sorted by RLQSR Score, degree={LR_DEGREE}) ")
 print(rlqsr_full_df.round(4).to_string())
 
-print(f"\n===== TOP-15 PC PAIRS BY RLQSR SCORE =====")
+print(f"\n TOP-15 PC PAIRS BY RLQSR SCORE ")
 print(rlqsr_full_df.head(15)[
     ["Fisher Ratio", "Span Ratio", "RLQSR Score", "Recall", "F1", "AUC"]
 ].round(4).to_string())
@@ -1687,7 +1687,7 @@ print(rlqsr_full_df.head(15)[
 # Best RLQSR pair
 best_rlqsr_pair = rlqsr_full_df.index[0]
 best_rlqsr_row  = rlqsr_full_df.iloc[0]
-print(f"\n===== BEST PAIR BY RLQSR SCORE: {best_rlqsr_pair} =====")
+print(f"\n BEST PAIR BY RLQSR SCORE: {best_rlqsr_pair} ")
 print(f"  Fisher Ratio : {best_rlqsr_row['Fisher Ratio']:.4f}")
 print(f"  Span Ratio   : {best_rlqsr_row['Span Ratio']:.4f}")
 print(f"  RLQSR Score  : {best_rlqsr_row['RLQSR Score']:.4f}")
@@ -1939,4 +1939,4 @@ print(f"  Best pair by VAL {SORT_BY:<8}  : {best_pair_name}")
 print(f"  LR degree                   : {LR_DEGREE}")
 print(f"  Fisher weight / Span weight : {RLQSR_FISHER_WEIGHT} / {RLQSR_SPAN_WEIGHT}")
 
-print("\nWE ARE FINALLY DONE. THIS HAS BEEN A LONG WAY BUT YOU HAVE MADE IT. CONGRATS")
+print("\n YAYYY.....WE ARE FINALLY DONE. THIS HAS BEEN A LONG WAY BUT YOU HAVE MADE IT. CONGRATS")
