@@ -134,20 +134,20 @@ SENTINEL_CONFIG = {
     # GALEX
 
     "nuv": {"sentinels": [-9999.0, -9999, -999.0, -999, -1, -1.0], "also_negative": True,
-            "also_zero": True, "log_transform": True},
+            "also_zero": True, "log_transform": False},
     "fuv": {"sentinels": [-9999.0, -9999, -999.0, -999, -1, -1.0], "also_negative": True,
-            "also_zero": True, "log_transform": True},
+            "also_zero": True, "log_transform": False},
 
     # UKIDSS
 
     "y_flux": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
-               "also_zero": False, "log_transform": True},
+               "also_zero": False, "log_transform": False},
     "j_flux": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
-               "also_zero": False, "log_transform": True},
+               "also_zero": False, "log_transform": False},
     "h_flux": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
-               "also_zero": False, "log_transform": True},
+               "also_zero": False, "log_transform": False},
     "k_flux": {"sentinels": [-9999.0, -9999, -1, -1.0], "also_negative": False,
-               "also_zero": False, "log_transform": True},
+               "also_zero": False, "log_transform": False},
 }
 
 # another cut applied for mage
