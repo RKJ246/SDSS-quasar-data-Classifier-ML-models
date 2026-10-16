@@ -5,4 +5,6 @@ In this work, we analyse SDSS quasar data based on differnet passbands offered b
 
 The SDSS data set can be found at https://www.sdss4.org/dr17/algorithms/qso_catalog/
 
+Note: Claude and ChatGPT have been used for finessing of the code, introducing some plotting styles and tidying up the variables and function calls. The idea and execution is entirely authors'.
+
 Thank you!
